@@ -90,22 +90,28 @@ def create_trend_visualization(market_data, sentiment_data):
     fig.update_layout(
         title='Price vs Sentiment Trends',
         xaxis=dict(
-            title='Date',
+            title=dict(  # Changed here
+                text='Date',  # Changed here
+            ),
             gridcolor='rgba(128,128,128,0.2)',
             gridwidth=1,
             showgrid=True
         ),
         yaxis=dict(
-            title='Price ($)',
-            titlefont=dict(color='blue'),
+            title=dict(  # Changed here
+                text='Price ($)',  # Changed here
+                font=dict(color='blue')  # Changed here - titlefont becomes font under title
+            ),
             tickfont=dict(color='blue'),
             gridcolor='rgba(128,128,128,0.2)',
             gridwidth=1,
             showgrid=True
         ),
         yaxis2=dict(
-            title='Sentiment Score',
-            titlefont=dict(color='red'),
+            title=dict(  # Changed here
+                text='Sentiment Score',  # Changed here
+                font=dict(color='red')  # Changed here - titlefont becomes font under title
+            ),
             tickfont=dict(color='red'),
             overlaying='y',
             side='right',
