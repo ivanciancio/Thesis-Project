@@ -16,6 +16,7 @@ from utils import (
     prepare_market_data
 )
 
+  
 def init_session_state():
     """Initialise session state variables"""
     if 'market_data' not in st.session_state:
@@ -100,3 +101,4 @@ if st.button("Fetch Market Data"):
             st.session_state.market_sentiment = market_sentiment
         else:
             st.error("Failed to fetch market data. Please check the symbol and try again.")
+            

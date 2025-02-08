@@ -1,0 +1,15 @@
+[theme]
+base = "dark"
+primaryColor = "#FF4B4B"
+
+[browser]
+gatherUsageStats = false
+
+[ui]
+hideSidebarNav = false
+
+[pages]
+"Main" = "🏠 Main"
+"Sentiment Analysis" = "🔍 Sentiment Analysis"
+"Correlation Analysis" = "🔗 Correlation Analysis"
+"Trend Interpretation" = "📊 Trend Interpretation"
