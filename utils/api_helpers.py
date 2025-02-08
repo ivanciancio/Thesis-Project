@@ -83,17 +83,21 @@ def fetch_news_data(symbol, start_date=None, end_date=None):
     """
     api_key = st.secrets["eodhd_api_key"]
     base_url = "https://eodhd.com/api/news"
+    
+    # Convert dates to UTC format for API request
+    if start_date:
+        start_date = pd.to_datetime(start_date).tz_localize('UTC')
+    if end_date:
+        end_date = pd.to_datetime(end_date).tz_localize('UTC')
+    
     params = {
         'api_token': api_key,
-        'symbols': symbol,
+        's': symbol,
         'limit': 1000,
-        'offset': 0
+        'offset': 0,
+        'from': start_date.strftime('%Y-%m-%d') if start_date else None,
+        'to': end_date.strftime('%Y-%m-%d') if end_date else None
     }
-    
-    if start_date:
-        params['from'] = start_date.strftime('%Y-%m-%d')
-    if end_date:
-        params['to'] = end_date.strftime('%Y-%m-%d')
     
     try:
         response = requests.get(base_url, params=params)
@@ -103,20 +107,39 @@ def fetch_news_data(symbol, start_date=None, end_date=None):
             if isinstance(data, list):
                 news_data = []
                 for item in data:
-                    news_date = pd.to_datetime(item.get('date')).tz_localize(None)
-                    news_item = {
-                        'Date': news_date,
-                        'Title': item.get('title', ''),
-                        'Text': item.get('text', ''),
-                        'Source': item.get('source', ''),
-                        'URL': item.get('link', '')
-                    }
-                    news_data.append(news_item)
+                    try:
+                        # Handle already tz-aware timestamps properly
+                        news_date = pd.to_datetime(item.get('date'))
+                        if news_date.tzinfo is not None:
+                            # Convert to UTC if it's tz-aware
+                            news_date = news_date.tz_convert('UTC')
+                        else:
+                            # Localize to UTC if it's tz-naive
+                            news_date = news_date.tz_localize('UTC')
+                            
+                        # Compare dates after converting to UTC
+                        if (not start_date or news_date >= start_date) and \
+                           (not end_date or news_date <= end_date):
+                            news_item = {
+                                'Date': news_date,
+                                'Title': item.get('title', ''),
+                                'Text': item.get('text', ''),
+                                'Source': item.get('source', ''),
+                                'URL': item.get('link', '')
+                            }
+                            news_data.append(news_item)
+                    except Exception as e:
+                        st.write(f"Error processing item: {str(e)}")
+                        continue
                 
                 df = pd.DataFrame(news_data)
                 if not df.empty:
-                    df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
-                return df
+                    # Convert all dates to naive timestamps after filtering
+                    df['Date'] = df['Date'].dt.tz_convert(None)
+                    df = df.sort_values('Date', ascending=True)
+                    
+                    st.write(f"Successfully processed {len(df)} news items")
+                    return df
                 
             return pd.DataFrame()
         else:

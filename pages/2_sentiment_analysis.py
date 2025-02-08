@@ -7,15 +7,27 @@ from analyzers.reddit_analyzer import RedditAnalyzer
 
 def plot_daily_sentiment(news_df):
     """Create daily sentiment visualization"""
-    # Convert dates to date (without time) and calculate daily averages
-    daily_sentiment = (news_df
-        .assign(Date=pd.to_datetime(news_df['Date']).dt.date)
-        .groupby('Date')
+    # Ensure date column is datetime and strip timezone
+    news_df['Date'] = pd.to_datetime(news_df['Date']).dt.tz_localize(None)
+    
+    # Extract the hour from the datetime for more granular visualization
+    news_df['Hour'] = news_df['Date'].dt.hour
+    
+    # Group by date and hour for more granular view
+    hourly_sentiment = (news_df
+        .groupby([news_df['Date'].dt.date, 'Hour'])
         .agg({
             'Sentiment Score': 'mean',
             'Title': 'count'
         })
-        .reset_index())
+        .reset_index()
+    )
+    
+    # Convert back to datetime
+    hourly_sentiment['DateTime'] = pd.to_datetime(
+        hourly_sentiment['Date'].astype(str) + ' ' + 
+        hourly_sentiment['Hour'].astype(str) + ':00:00'
+    )
     
     # Create figure
     fig = go.Figure()
@@ -23,47 +35,66 @@ def plot_daily_sentiment(news_df):
     # Add sentiment score line
     fig.add_trace(
         go.Scatter(
-            x=daily_sentiment['Date'],
-            y=daily_sentiment['Sentiment Score'],
+            x=hourly_sentiment['DateTime'],
+            y=hourly_sentiment['Sentiment Score'],
             mode='lines+markers',
             name='News Sentiment',
             line=dict(color='blue', width=2),
-            marker=dict(size=6)
+            marker=dict(
+                size=8,
+                symbol='circle',
+                color='blue',
+                line=dict(color='white', width=1)
+            )
         )
     )
     
     # Add article count bars
     fig.add_trace(
         go.Bar(
-            x=daily_sentiment['Date'],
-            y=daily_sentiment['Title'],
+            x=hourly_sentiment['DateTime'],
+            y=hourly_sentiment['Title'],
             name='Number of Articles',
             yaxis='y2',
-            marker_color='rgba(0,0,255,0.2)'
+            marker_color='rgba(0,0,255,0.2)',
+            width=3600000  # One hour width in milliseconds
         )
     )
     
     # Update layout
     fig.update_layout(
         title="Sentiment Analysis Over Time",
-        xaxis_title="Date",
+        xaxis=dict(
+            title="Date",
+            type='date',
+            tickformat='%Y-%m-%d %H:%M',
+            tickangle=45,
+            tickmode='auto',
+            nticks=20,
+            showgrid=True,
+            gridcolor='rgba(128,128,128,0.1)'
+        ),
         yaxis=dict(
             title="Sentiment Score",
             range=[-1, 1],
             gridcolor='rgba(128,128,128,0.2)',
             zeroline=True,
-            zerolinecolor='rgba(128,128,128,0.4)'
+            zerolinecolor='rgba(128,128,128,0.4)',
+            tickformat='.2f'
         ),
         yaxis2=dict(
             title="Number of Articles",
             overlaying='y',
             side='right',
-            showgrid=False
+            showgrid=False,
+            range=[0, max(hourly_sentiment['Title']) * 1.2]
         ),
         height=500,
         showlegend=True,
         hovermode='x unified',
-        plot_bgcolor='white'
+        plot_bgcolor='white',
+        margin=dict(b=100),
+        bargap=0
     )
     
     return fig

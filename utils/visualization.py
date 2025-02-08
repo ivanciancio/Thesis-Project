@@ -223,3 +223,29 @@ def plot_correlation_matrix(correlation_data):
     )
     
     return fig
+
+def plot_enhanced_correlation_matrix(correlations, metrics):
+    """Create enhanced correlation matrix visualization"""
+    fig = go.Figure(data=go.Heatmap(
+        z=correlations.values,
+        x=correlations.columns,
+        y=correlations.index,
+        colorscale='RdBu',
+        zmin=-1,
+        zmax=1,
+        text=np.round(correlations.values, 3),
+        texttemplate='%{text}<br>p=%{customdata}',
+        customdata=np.round(metrics['p_values'], 3),
+        textfont={"size": 14},
+        hoverongaps=False
+    ))
+    
+    fig.update_layout(
+        title="Correlation Matrix with Statistical Significance",
+        height=600,
+        xaxis_title="",
+        yaxis_title="",
+        yaxis_autorange='reversed'
+    )
+    
+    return fig
