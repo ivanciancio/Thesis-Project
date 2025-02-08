@@ -5,3 +5,8 @@ pandas
 plotly
 textblob
 requests
+vaderSentiment
+transformers
+torch
+nltk
+numpy

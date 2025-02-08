@@ -17,7 +17,7 @@ from utils import (
 )
 
 def init_session_state():
-    """Initialize session state variables"""
+    """Initialise session state variables"""
     if 'market_data' not in st.session_state:
         st.session_state.market_data = None
     if 'news_data' not in st.session_state:
@@ -57,10 +57,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize session state
+# Initialise session state
 init_session_state()
 
-# Main title for the app
+# Main title
 st.title("Financial Market Sentiment Analysis")
 
 # Market Data Analysis section
@@ -87,7 +87,7 @@ if st.button("Fetch Market Data"):
             st.session_state.symbol = symbol
             st.success("Market data fetched successfully!")
             
-            # Display market data visualization
+            # Display market data visualisation
             fig = plot_market_data(processed_data, market_sentiment)
             st.plotly_chart(fig, use_container_width=True)
             

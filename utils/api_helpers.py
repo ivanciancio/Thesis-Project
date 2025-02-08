@@ -32,12 +32,12 @@ def fetch_market_sentiment(symbol):
             sentiment_data = {
                 'Date': pd.to_datetime(datetime.now().strftime('%Y-%m-%d')),
                 'Sentiment': sentiment_score,
-                'Normalized_Sentiment': (sentiment_score - 1) / 4
+                'Normalised_Sentiment': (sentiment_score - 1) / 4
             }
             
             return pd.DataFrame([sentiment_data])
     
-    return pd.DataFrame(columns=['Date', 'Sentiment', 'Normalized_Sentiment'])
+    return pd.DataFrame(columns=['Date', 'Sentiment', 'Normalised_Sentiment'])
 
 @handle_api_error
 def fetch_historical_prices(symbol, start_date, end_date):
@@ -61,7 +61,7 @@ def fetch_historical_prices(symbol, start_date, end_date):
         if isinstance(data, list):
             df = pd.DataFrame(data)
             if not df.empty:
-                # Standardize column names
+                # Standardise column names
                 df.rename(columns={
                     'date': 'Date',
                     'open': 'Open',
@@ -114,8 +114,8 @@ def fetch_news_data(symbol, start_date=None, end_date=None):
                             # Convert to UTC if it's tz-aware
                             news_date = news_date.tz_convert('UTC')
                         else:
-                            # Localize to UTC if it's tz-naive
-                            news_date = news_date.tz_localize('UTC')
+                            # Localise to UTC if it's tz-naive
+                            news_date = news_date.tz_localise('UTC')
                             
                         # Compare dates after converting to UTC
                         if (not start_date or news_date >= start_date) and \

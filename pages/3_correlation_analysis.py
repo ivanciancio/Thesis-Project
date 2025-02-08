@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-#from utils.visualization import plot_correlation_matrix
+#from utils.visualisation import plot_correlation_matrix
 
 def interpret_correlation_strength(correlation):
     """Interpret the strength of a correlation coefficient"""
@@ -36,16 +36,20 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None):
         market_data = market_data.copy()
         news_data = news_data.copy()
         
-        # Convert all dates to datetime and normalize to remove time component
+        # Convert all dates to datetime and normalise to remove time component
         market_data['Date'] = pd.to_datetime(market_data['Date']).dt.normalize()
         news_data['Date'] = pd.to_datetime(news_data['Date']).dt.normalize()
         
         # Calculate returns using closing prices
         market_data['Returns'] = market_data['Close'].pct_change()
         
+        # Check for sentiment column names
+        sentiment_column = 'Sentiment Score' if 'Sentiment Score' in news_data.columns else 'Sentiment_Score'
+        reddit_sentiment_column = 'Sentiment_Score' if reddit_data is not None else None
+        
         # Calculate daily sentiment averages for news
         daily_news = (news_data
-            .groupby('Date')['Sentiment Score']
+            .groupby('Date')[sentiment_column]
             .agg(['mean', 'count'])
             .reset_index())
         daily_news.columns = ['Date', 'News_Sentiment', 'News_Count']
@@ -64,7 +68,7 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None):
             reddit_data['Date'] = pd.to_datetime(reddit_data['Date']).dt.normalize()
             
             daily_reddit = (reddit_data
-                .groupby('Date')['Sentiment Score']
+                .groupby('Date')[reddit_sentiment_column]
                 .agg(['mean', 'count'])
                 .reset_index())
             daily_reddit.columns = ['Date', 'Reddit_Sentiment', 'Reddit_Count']
@@ -76,7 +80,7 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None):
                 how='outer'
             )
         
-        # Sort by date and fill missing values forward then backward
+        # Sort by date
         merged_data = merged_data.sort_values('Date')
         
         # Calculate rolling metrics
@@ -86,29 +90,15 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None):
         if 'Reddit_Sentiment' in merged_data.columns:
             merged_data['Rolling_Reddit_Sentiment'] = merged_data['Reddit_Sentiment'].rolling(window).mean()
         
-        # Filter to the common date range where we have all data
-        start_date = max(
-            merged_data['Date'].min(),
-            merged_data[merged_data['Returns'].notna()]['Date'].min(),
-            merged_data[merged_data['News_Sentiment'].notna()]['Date'].min()
-        )
+        # Filter to overlapping date range
+        merged_data = merged_data.dropna(subset=['Returns', 'News_Sentiment'])
         
-        end_date = min(
-            merged_data['Date'].max(),
-            merged_data[merged_data['Returns'].notna()]['Date'].max(),
-            merged_data[merged_data['News_Sentiment'].notna()]['Date'].max()
-        )
-        
-        merged_data = merged_data[
-            (merged_data['Date'] >= start_date) &
-            (merged_data['Date'] <= end_date)
-        ]
-        
-        st.write("Data Summary:")
-        st.write(f"Date Range: {start_date.date()} to {end_date.date()}")
-        st.write(f"Total Days: {len(merged_data)}")
-        
-        return merged_data.dropna(subset=['Returns', 'News_Sentiment'])
+        if len(merged_data) == 0:
+            st.warning("No overlapping data found between market returns and sentiment scores")
+            return pd.DataFrame()
+            
+        st.success(f"Number of aligned data points: {len(merged_data)}")
+        return merged_data
         
     except Exception as e:
         st.error(f"Error aligning dates: {str(e)}")
@@ -118,40 +108,50 @@ def calculate_correlation_metrics(data):
     """Calculate enhanced correlation metrics"""
     metrics = {}
     
-    # Calculate standard correlations
-    correlations = data[['Returns', 'News_Sentiment', 'Reddit_Sentiment']].corr()
-    
-    # Calculate rolling correlations
-    window = 5  # 5-day rolling window
-    rolling_corr_news = data['Returns'].rolling(window).corr(data['News_Sentiment'])
-    metrics['rolling_corr_news'] = rolling_corr_news.mean()
-    
-    if 'Reddit_Sentiment' in data.columns:
-        rolling_corr_reddit = data['Returns'].rolling(window).corr(data['Reddit_Sentiment'])
-        metrics['rolling_corr_reddit'] = rolling_corr_reddit.mean()
-    
-    # Add correlation significance tests
-    from scipy import stats
-    
-    # Market Returns vs News Sentiment
-    r_news = stats.pearsonr(data['Returns'], data['News_Sentiment'])
-    metrics['news_correlation'] = {
-        'coefficient': r_news[0],
-        'p_value': r_news[1]
-    }
-    
-    # Market Returns vs Reddit Sentiment
-    if 'Reddit_Sentiment' in data.columns:
-        r_reddit = stats.pearsonr(data['Returns'], data['Reddit_Sentiment'])
-        metrics['reddit_correlation'] = {
-            'coefficient': r_reddit[0],
-            'p_value': r_reddit[1]
+    try:
+        # Calculate standard correlations
+        correlation_columns = ['Returns', 'News_Sentiment']
+        if 'Reddit_Sentiment' in data.columns:
+            correlation_columns.append('Reddit_Sentiment')
+            
+        correlations = data[correlation_columns].corr()
+        
+        # Calculate rolling correlations
+        window = 5  # 5-day rolling window
+        rolling_corr_news = data['Returns'].rolling(window).corr(data['News_Sentiment'])
+        metrics['rolling_corr_news'] = rolling_corr_news.mean()
+        
+        if 'Reddit_Sentiment' in data.columns:
+            rolling_corr_reddit = data['Returns'].rolling(window).corr(data['Reddit_Sentiment'])
+            metrics['rolling_corr_reddit'] = rolling_corr_reddit.mean()
+        
+        # Add correlation significance tests
+        from scipy import stats
+        
+        # Market Returns vs News Sentiment
+        r_news = stats.pearsonr(data['Returns'], data['News_Sentiment'])
+        metrics['news_correlation'] = {
+            'coefficient': r_news[0],
+            'p_value': r_news[1]
         }
-    
-    return correlations, metrics    
+        
+        # Market Returns vs Reddit Sentiment
+        if 'Reddit_Sentiment' in data.columns:
+            r_reddit = stats.pearsonr(data['Returns'], data['Reddit_Sentiment'])
+            metrics['reddit_correlation'] = {
+                'coefficient': r_reddit[0],
+                'p_value': r_reddit[1]
+            }
+        
+        return correlations, metrics
+        
+    except Exception as e:
+        st.error(f"Error calculating correlation metrics: {str(e)}")
+        st.write("Data columns available:", data.columns.tolist())
+        return pd.DataFrame(), {}    
 
 def plot_correlation_matrix(correlation_data):
-    """Create correlation matrix visualization"""
+    """Create correlation matrix visualisation"""
     if correlation_data.empty:
         return None
         
@@ -179,68 +179,118 @@ def plot_correlation_matrix(correlation_data):
     return fig
 
 def display_correlation_summary(correlations, metrics):
-    """Display correlation summary in a more organized layout"""
+    """Display correlation summary in a more organised layout"""
     st.subheader("Correlation Summary")
 
     # Create columns for different correlation categories
     col1, col2 = st.columns(2)
 
-    # Group correlations by main variables
     with col1:
         st.markdown("#### Market Correlations")
-        
-        # Create a nice table for market correlations
         market_data = []
-        for var in ['News Sentiment', 'Reddit Sentiment', 'Rolling Returns', 'News Count', 'Reddit Count']:
-            if f'Rolling_{var.replace(" ", "_")}' in correlations.columns:
-                corr = correlations.loc['Returns', f'Rolling_{var.replace(" ", "_")}']
-                strength = get_correlation_strength(corr)
-                direction = 'positive' if corr > 0 else 'negative'
-                market_data.append({
-                    'Variable': var,
-                    'Correlation': f"{corr:.3f}",
-                    'Interpretation': f"{strength} {direction}"
-                })
+        # Add Returns vs News Sentiment correlation
+        if 'news_correlation' in metrics:
+            market_data.append({
+                'Variable': 'News Sentiment',
+                'Correlation': f"{metrics['news_correlation']['coefficient']:.3f}",
+                'Interpretation': interpret_correlation(metrics['news_correlation']['coefficient'])
+            })
+        # Add Returns vs Reddit Sentiment correlation
+        if 'reddit_correlation' in metrics:
+            market_data.append({
+                'Variable': 'Reddit Sentiment',
+                'Correlation': f"{metrics['reddit_correlation']['coefficient']:.3f}",
+                'Interpretation': interpret_correlation(metrics['reddit_correlation']['coefficient'])
+            })
         
-        market_df = pd.DataFrame(market_data)
-        st.table(market_df)
+        if market_data:
+            st.table(pd.DataFrame(market_data))
+        else:
+            st.write("No market correlations available")
 
     with col2:
         st.markdown("#### Sentiment Correlations")
-        
-        # Create a nice table for sentiment correlations
         sentiment_data = []
-        for var in ['Returns', 'Close', 'News Count', 'Reddit Count']:
-            if var in correlations.columns:
-                corr = correlations.loc['News_Sentiment', var]
-                strength = get_correlation_strength(corr)
-                direction = 'positive' if corr > 0 else 'negative'
-                sentiment_data.append({
-                    'Variable': var,
-                    'Correlation': f"{corr:.3f}",
-                    'Interpretation': f"{strength} {direction}"
-                })
+        # Add News vs Reddit Sentiment correlation if available
+        if 'News_Sentiment' in correlations.columns and 'Reddit_Sentiment' in correlations.columns:
+            corr = correlations.loc['News_Sentiment', 'Reddit_Sentiment']
+            sentiment_data.append({
+                'Variable': 'News vs Reddit',
+                'Correlation': f"{corr:.3f}",
+                'Interpretation': interpret_correlation(corr)
+            })
         
-        sentiment_df = pd.DataFrame(sentiment_data)
-        st.table(sentiment_df)
+        if sentiment_data:
+            st.table(pd.DataFrame(sentiment_data))
+        else:
+            st.write("No sentiment correlations available")
 
-    # Add statistical significance section
-    st.markdown("#### Statistical Significance")
-    sig_col1, sig_col2 = st.columns(2)
+    # Statistical Significance section
+    st.subheader("Statistical Significance")
     
-    with sig_col1:
+    # Display p-values
+    col1, col2 = st.columns(2)
+    with col1:
         if 'news_correlation' in metrics:
             st.metric(
                 "News Sentiment p-value",
                 f"{metrics['news_correlation']['p_value']:.3f}"
             )
-    
-    with sig_col2:
+            
+            # Add correlation interpretation
+            corr = metrics['news_correlation']['coefficient']
+            st.write(f"News Sentiment vs Returns: {corr:.3f}")
+            st.write(get_correlation_description('News Sentiment vs Returns', corr))
+
+    with col2:
         if 'reddit_correlation' in metrics:
             st.metric(
                 "Reddit Sentiment p-value",
                 f"{metrics['reddit_correlation']['p_value']:.3f}"
             )
+            
+            # Add correlation interpretation
+            corr = metrics['reddit_correlation']['coefficient']
+            st.write(f"Reddit Sentiment vs Returns: {corr:.3f}")
+            st.write(get_correlation_description('Reddit Sentiment vs Returns', corr))
+
+    # Cross-platform correlation if available
+    if 'News_Sentiment' in correlations.columns and 'Reddit_Sentiment' in correlations.columns:
+        st.write("News Sentiment vs Reddit Sentiment:", 
+                f"{correlations.loc['News_Sentiment', 'Reddit_Sentiment']:.3f}")
+        st.write(get_correlation_description(
+            'News Sentiment vs Reddit Sentiment',
+            correlations.loc['News_Sentiment', 'Reddit_Sentiment']
+        ))
+
+def interpret_correlation(correlation):
+    """Interpret correlation strength"""
+    abs_corr = abs(correlation)
+    if abs_corr < 0.2:
+        strength = "weak"
+    elif abs_corr < 0.4:
+        strength = "moderate"
+    elif abs_corr < 0.6:
+        strength = "strong"
+    else:
+        strength = "very strong"
+        
+    direction = "positive" if correlation > 0 else "negative"
+    return f"{strength} {direction}"
+
+def get_correlation_description(pair, correlation):
+    """Get a descriptive interpretation of the correlation"""
+    if abs(correlation) < 0.2:
+        strength = "weak"
+    elif abs(correlation) < 0.4:
+        strength = "moderate"
+    elif abs(correlation) < 0.6:
+        strength = "strong"
+    else:
+        strength = "very strong"
+        
+    direction = "positive" if correlation > 0 else "negative"
+    return f"There is a {strength} {direction} correlation."
 
 def get_correlation_strength(correlation):
     """Get correlation strength category"""
@@ -298,7 +348,7 @@ def correlation_analysis_page():
         if fig:
             st.plotly_chart(fig, use_container_width=True)
         
-        # Display organized correlation summary
+        # Display organised correlation summary
         display_correlation_summary(correlations, metrics)
         
         for col1 in correlations.columns:

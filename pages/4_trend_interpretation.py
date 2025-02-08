@@ -1,5 +1,5 @@
 import streamlit as st
-from analyzers.trend_analyzer import SentimentTrendAnalyzer
+from analysers.trend_analyser import SentimentTrendAnalyser
 import plotly.graph_objects as go
 import pandas as pd
 
@@ -50,8 +50,8 @@ def display_recommendations(recommendations):
     for i, rec in enumerate(recommendations, 1):
         st.write(f"{i}. {rec}")
 
-def create_trend_visualization(market_data, sentiment_data):
-    """Create improved price vs sentiment visualization"""
+def create_trend_visualisation(market_data, sentiment_data):
+    """Create improved price vs sentiment visualisation"""
     fig = go.Figure()
     
     # Add price line
@@ -145,13 +145,13 @@ def trend_interpretation_page():
         st.warning("Please complete previous analyses first")
         return
     
-    trend_analyzer = SentimentTrendAnalyzer()
+    trend_analyser = SentimentTrendAnalyser()
     
-    # Analyze market trends
-    market_trend = trend_analyzer.analyze_trends(st.session_state.market_data['Close'])
+    # Analyse market trends
+    market_trend = trend_analyser.analyse_trends(st.session_state.market_data['Close'])
     
-    # Analyze sentiment trends
-    sentiment_trend = trend_analyzer.analyze_trends(st.session_state.news_data['Sentiment Score'])
+    # Analyse sentiment trends
+    sentiment_trend = trend_analyser.analyse_trends(st.session_state.news_data['Sentiment Score'])
     
     # Display trend analysis
     st.subheader("Market Trends")
@@ -160,15 +160,15 @@ def trend_interpretation_page():
     st.subheader("Sentiment Trends")
     display_trend_analysis(sentiment_trend)
     
-    # Create and display visualization
-    fig = create_trend_visualization(
+    # Create and display visualisation
+    fig = create_trend_visualisation(
         st.session_state.market_data,
         st.session_state.news_data
     )
     st.plotly_chart(fig, use_container_width=True)
     
     # Get and display recommendations
-    recommendations = trend_analyzer.get_trend_recommendations(market_trend, sentiment_trend)
+    recommendations = trend_analyser.get_trend_recommendations(market_trend, sentiment_trend)
     display_recommendations(recommendations)
     
     # Add trend summary for download

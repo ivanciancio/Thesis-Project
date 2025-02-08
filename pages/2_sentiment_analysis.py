@@ -2,15 +2,15 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from utils.api_helpers import fetch_news_data
-from analyzers.sentiment_analyzer import FinancialSentimentAnalyzer
-from analyzers.reddit_analyzer import RedditAnalyzer
+from analysers.sentiment_analyser import FinancialSentimentAnalyser
+from analysers.reddit_analyser import RedditAnalyser
 
 def plot_daily_sentiment(news_df):
-    """Create daily sentiment visualization"""
+    """Create daily sentiment visualisation"""
     # Ensure date column is datetime and strip timezone
     news_df['Date'] = pd.to_datetime(news_df['Date']).dt.tz_localize(None)
     
-    # Extract the hour from the datetime for more granular visualization
+    # Extract the hour from the datetime for more granular visualisation
     news_df['Hour'] = news_df['Date'].dt.hour
     
     # Group by date and hour for more granular view
@@ -100,7 +100,7 @@ def plot_daily_sentiment(news_df):
     return fig
 
 def plot_sentiment_comparison(news_data, reddit_data=None):
-    """Create sentiment comparison visualization"""
+    """Create sentiment comparison visualisation"""
     fig = go.Figure()
     
     # Add news sentiment
@@ -178,21 +178,21 @@ def news_analysis_tab():
                 )
                 
                 if news_data is not None and not news_data.empty:
-                    sentiment_analyzer = FinancialSentimentAnalyzer()
+                    sentiment_analyser = FinancialSentimentAnalyser()
                     
                     # Process each news item
-                    analyzed_news = []
+                    analysed_news = []
                     for _, row in news_data.iterrows():
                         text = f"{row['Title']} {row.get('Text', '')}"
-                        sentiment_result = sentiment_analyzer.analyze_sentiment(text)
-                        analyzed_news.append(sentiment_result)
+                        sentiment_result = sentiment_analyser.analyse_sentiment(text)
+                        analysed_news.append(sentiment_result)
                     
                     # Create DataFrame with analysis results
                     news_df = pd.DataFrame({
                         'Date': news_data['Date'],
                         'Title': news_data['Title'],
-                        'Sentiment Score': [result['score'] for result in analyzed_news],
-                        'Sentiment': [result['sentiment'] for result in analyzed_news]
+                        'Sentiment Score': [result['score'] for result in analysed_news],
+                        'Sentiment': [result['sentiment'] for result in analysed_news]
                     })
                     
                     news_df['Date'] = pd.to_datetime(news_df['Date']).dt.tz_localize(None)
@@ -244,58 +244,58 @@ def reddit_analysis_tab():
     if st.button("Fetch Reddit Data"):
         with st.spinner("Fetching Reddit data..."):
             try:
-                reddit_analyzer = RedditAnalyzer()  # No need to pass credentials anymore
+                reddit_analyser = RedditAnalyser()
                 
                 # Get market data date range
                 start_date = st.session_state.market_data['Date'].min()
                 end_date = st.session_state.market_data['Date'].max()
                 
                 # Fetch Reddit data
-                reddit_data = reddit_analyzer.fetch_reddit_data(
+                reddit_data = reddit_analyser.fetch_reddit_data(
                     st.session_state.symbol,
                     start_date,
                     end_date
                 )
                 
                 if reddit_data is not None and not reddit_data.empty:
-                    # Analyze sentiment
-                    sentiment_analyzer = FinancialSentimentAnalyzer()
-                    analyzed_data = reddit_analyzer.analyze_content(reddit_data, sentiment_analyzer)
+                    # Analyse sentiment
+                    sentiment_analyser = FinancialSentimentAnalyser()
+                    analysed_data = reddit_analyser.analyse_content(reddit_data, sentiment_analyser)
                     
-                    if not analyzed_data.empty:
-                        st.session_state.reddit_data = analyzed_data
+                    if not analysed_data.empty:
+                        st.session_state.reddit_data = analysed_data
                         
                         # Show summary metrics
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric(
                                 "Total Posts",
-                                len(analyzed_data[analyzed_data['Type'] == 'post'])
+                                len(analysed_data[analysed_data['Type'] == 'post'])
                             )
                             st.metric(
                                 "Total Comments",
-                                len(analyzed_data[analyzed_data['Type'] == 'comment'])
+                                len(analysed_data[analysed_data['Type'] == 'comment'])
                             )
                         
                         with col2:
-                            avg_sentiment = analyzed_data['Sentiment Score'].mean()
+                            avg_sentiment = analysed_data['Sentiment_Score'].mean()  # Changed from 'Sentiment Score'
                             st.metric(
                                 "Average Sentiment",
                                 f"{avg_sentiment:.2f}"
                             )
                             st.metric(
                                 "Positive Posts/Comments",
-                                len(analyzed_data[analyzed_data['Sentiment'] == 'Positive'])
+                                len(analysed_data[analysed_data['Sentiment'] == 'Positive'])
                             )
                         
                         with col3:
                             st.metric(
                                 "Total Score",
-                                analyzed_data['Score'].sum()
+                                analysed_data['Score'].sum()
                             )
                             st.metric(
                                 "Negative Posts/Comments",
-                                len(analyzed_data[analyzed_data['Sentiment'] == 'Negative'])
+                                len(analysed_data[analysed_data['Sentiment'] == 'Negative'])
                             )
                         
                         # Display sentiment distribution
@@ -306,7 +306,7 @@ def reddit_analysis_tab():
                         
                         # Add sentiment score distribution
                         fig.add_trace(go.Box(
-                            y=analyzed_data['Sentiment Score'],
+                            y=analysed_data['Sentiment_Score'],  # Changed from 'Sentiment Score'
                             name='Sentiment Distribution',
                             boxpoints='all',
                             jitter=0.3,
@@ -331,11 +331,11 @@ def reddit_analysis_tab():
                         st.subheader("Reddit Sentiment Trend")
                         
                         # Calculate daily sentiment
-                        daily_sentiment = (analyzed_data
-                            .assign(Date=analyzed_data['Date'].dt.date)
+                        daily_sentiment = (analysed_data
+                            .assign(Date=analysed_data['Date'].dt.date)
                             .groupby('Date')
                             .agg({
-                                'Sentiment Score': 'mean',
+                                'Sentiment_Score': 'mean',  # Changed from 'Sentiment Score'
                                 'Type': 'count'
                             })
                             .reset_index())
@@ -347,7 +347,7 @@ def reddit_analysis_tab():
                         fig.add_trace(
                             go.Scatter(
                                 x=daily_sentiment['Date'],
-                                y=daily_sentiment['Sentiment Score'],
+                                y=daily_sentiment['Sentiment_Score'],  # Changed from 'Sentiment Score'
                                 mode='lines+markers',
                                 name='Reddit Sentiment',
                                 line=dict(color='orange', width=2),
@@ -392,7 +392,7 @@ def reddit_analysis_tab():
                         
                         # Display recent posts/comments
                         st.subheader("Recent Reddit Activity")
-                        display_df = analyzed_data[['Date', 'Type', 'Text', 'Sentiment', 'Score', 'URL']].copy()
+                        display_df = analysed_data[['Date', 'Type', 'Text', 'Sentiment', 'Sentiment_Score', 'Score', 'URL']].copy()  # Changed from 'Sentiment Score'
                         display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
                         st.dataframe(
                             display_df.sort_values('Date', ascending=False),
@@ -402,13 +402,13 @@ def reddit_analysis_tab():
                         # Add download button
                         st.download_button(
                             "Download Reddit Analysis Data",
-                            analyzed_data.to_csv(index=False),
+                            analysed_data.to_csv(index=False),
                             "reddit_analysis.csv",
                             "text/csv",
                             key='download-reddit-data'
                         )
                     else:
-                        st.warning("Could not analyze Reddit content")
+                        st.warning("Could not analyse Reddit content")
                 else:
                     st.warning("No Reddit data found for the specified period")
                     
