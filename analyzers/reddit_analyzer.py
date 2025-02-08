@@ -2,14 +2,14 @@ import praw
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timezone
 
 class RedditAnalyzer:
-    def __init__(self, client_id, client_secret, user_agent="FinancialSentimentBot/1.0"):
-        """Initialize Reddit analyzer with API credentials"""
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.user_agent = user_agent
+    def __init__(self):
+        """Initialize Reddit analyzer using credentials from secrets.toml"""
+        self.client_id = st.secrets["reddit"]["client_id"]
+        self.client_secret = st.secrets["reddit"]["client_secret"]
+        self.user_agent = st.secrets["reddit"].get("user_agent", "FinancialSentimentBot/1.0")
         self.reddit = None
         self.subreddits = ['wallstreetbets', 'stocks', 'investing', 'stockmarket']
 
@@ -32,70 +32,110 @@ class RedditAnalyzer:
         
         Args:
             symbol (str): Stock symbol
-            start_date (pd.Timestamp): Start date
-            end_date (pd.Timestamp): End date
+            start_date (datetime/Timestamp): Start date
+            end_date (datetime/Timestamp): End date
         """
         if not self.reddit and not self.initialize_reddit():
             return pd.DataFrame()
 
-        # Convert timestamps to datetime.datetime for comparison
-        start_datetime = pd.Timestamp(start_date).to_pydatetime()
-        end_datetime = pd.Timestamp(end_date).to_pydatetime()
+        # Convert timestamps to UTC timestamps for Reddit API
+        start_timestamp = pd.Timestamp(start_date).replace(tzinfo=timezone.utc).timestamp()
+        end_timestamp = pd.Timestamp(end_date).replace(tzinfo=timezone.utc).timestamp()
+        
+        st.info(f"Fetching Reddit data from {start_date} to {end_date}")
         
         reddit_data = []
+        total_posts_checked = 0
         
         try:
             for subreddit_name in self.subreddits:
+                st.write(f"Searching in r/{subreddit_name}...")
                 subreddit = self.reddit.subreddit(subreddit_name)
                 
-                # Search for posts containing the symbol
-                search_query = f"({symbol} OR ${symbol})"
-                posts = subreddit.search(search_query, sort='new', time_filter='month')
+                # Create multiple search queries to increase chances of finding relevant posts
+                search_queries = [
+                    f'"{symbol}"',  # Exact match
+                    f"${symbol}",   # Stock symbol format
+                    f"{symbol} stock",
+                    f"{symbol} price",
+                    f"{symbol} analysis"
+                ]
                 
-                for post in posts:
-                    post_datetime = datetime.fromtimestamp(post.created_utc)
+                for query in search_queries:
+                    posts = subreddit.search(
+                        query,
+                        sort='new',
+                        time_filter='year',  # Expanded time filter
+                        limit=100  # Increased limit
+                    )
                     
-                    # Check if post is within date range
-                    if start_datetime <= post_datetime <= end_datetime:
-                        post_data = {
-                            'Date': post_datetime,
-                            'Title': post.title,
-                            'Text': post.selftext,
-                            'Score': post.score,
-                            'Comments': post.num_comments,
-                            'Subreddit': subreddit_name,
-                            'Type': 'post',
-                            'URL': f"https://reddit.com{post.permalink}"
-                        }
-                        reddit_data.append(post_data)
+                    for post in posts:
+                        total_posts_checked += 1
+                        post_timestamp = post.created_utc
                         
-                        # Get top comments
-                        post.comments.replace_more(limit=0)
-                        for comment in post.comments.list()[:10]:  # Get top 10 comments
-                            comment_datetime = datetime.fromtimestamp(comment.created_utc)
-                            if start_datetime <= comment_datetime <= end_datetime:
-                                comment_data = {
-                                    'Date': comment_datetime,
-                                    'Title': '[Comment]',
-                                    'Text': comment.body,
-                                    'Score': comment.score,
-                                    'Comments': 0,
+                        # Check if post is within date range
+                        if start_timestamp <= post_timestamp <= end_timestamp:
+                            # Check if post is actually about the stock (to avoid false positives)
+                            post_text = f"{post.title.lower()} {post.selftext.lower()}"
+                            if (f"${symbol.lower()}" in post_text or 
+                                f" {symbol.lower()} " in post_text or 
+                                symbol.lower() in post_text.split()):
+                                
+                                post_data = {
+                                    'Date': datetime.fromtimestamp(post_timestamp),
+                                    'Title': post.title,
+                                    'Text': post.selftext,
+                                    'Score': post.score,
+                                    'Comments': post.num_comments,
                                     'Subreddit': subreddit_name,
-                                    'Type': 'comment',
-                                    'URL': f"https://reddit.com{comment.permalink}"
+                                    'Type': 'post',
+                                    'URL': f"https://reddit.com{post.permalink}"
                                 }
-                                reddit_data.append(comment_data)
+                                reddit_data.append(post_data)
+                                
+                                # Get top comments
+                                try:
+                                    post.comments.replace_more(limit=0)
+                                    for comment in post.comments.list()[:5]:  # Reduced to top 5 comments
+                                        comment_timestamp = comment.created_utc
+                                        if start_timestamp <= comment_timestamp <= end_timestamp:
+                                            comment_data = {
+                                                'Date': datetime.fromtimestamp(comment_timestamp),
+                                                'Title': '[Comment]',
+                                                'Text': comment.body,
+                                                'Score': comment.score,
+                                                'Comments': 0,
+                                                'Subreddit': subreddit_name,
+                                                'Type': 'comment',
+                                                'URL': f"https://reddit.com{comment.permalink}"
+                                            }
+                                            reddit_data.append(comment_data)
+                                except Exception as e:
+                                    st.warning(f"Couldn't fetch comments for a post: {str(e)}")
+                                    continue
             
             # Convert to DataFrame and sort by date
             df = pd.DataFrame(reddit_data)
-            if not df.empty:
-                df['Date'] = pd.to_datetime(df['Date'])
-                df = df.sort_values('Date', ascending=False)
             
-            return df
+            if not df.empty:
+                st.success(f"Found {len(df)} relevant posts/comments out of {total_posts_checked} posts checked")
+                df['Date'] = pd.to_datetime(df['Date'])
+                return df.sort_values('Date', ascending=False)
+            else:
+                st.warning(f"No relevant posts found after checking {total_posts_checked} posts")
+                # Add debugging information
+                st.info(f"""
+                Search details:
+                - Date range: {start_date} to {end_date}
+                - Symbol: {symbol}
+                - Subreddits searched: {', '.join(self.subreddits)}
+                - Total posts checked: {total_posts_checked}
+                Try adjusting the date range or check if there might be alternative symbols used for this stock.
+                """)
+                return pd.DataFrame()
             
         except Exception as e:
-            st.error(f"Error fetching Reddit data: {e}")
+            st.error(f"Error fetching Reddit data: {str(e)}")
             return pd.DataFrame()
 
     def analyze_content(self, reddit_df, sentiment_analyzer):

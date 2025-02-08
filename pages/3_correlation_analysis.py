@@ -60,8 +60,8 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None):
             daily_reddit = reddit_data.groupby('Date')['Sentiment Score'].mean()
             combined_data['Reddit_Sentiment'] = daily_reddit
         
-        # Remove any NaN values
-        combined_data = combined_data.fillna(method='ffill').fillna(method='bfill')
+        # Forward fill followed by backward fill to handle missing values
+        combined_data = combined_data.ffill().bfill()
         
         return combined_data
         

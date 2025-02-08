@@ -11,10 +11,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.error_handler import handle_api_error
 
 @handle_api_error
-def fetch_market_sentiment(symbol, api_key):
+def fetch_market_sentiment(symbol):
     """
-    Fetch market sentiment data from EODHD API
+    Fetch market sentiment data from EODHD API using API key from secrets
     """
+    api_key = st.secrets["eodhd_api_key"]
     base_url = f"https://eodhd.com/api/fundamentals/{symbol}.US"
     params = {
         'api_token': api_key,
@@ -39,10 +40,11 @@ def fetch_market_sentiment(symbol, api_key):
     return pd.DataFrame(columns=['Date', 'Sentiment', 'Normalized_Sentiment'])
 
 @handle_api_error
-def fetch_historical_prices(symbol, api_key, start_date, end_date):
+def fetch_historical_prices(symbol, start_date, end_date):
     """
-    Fetch historical price data from EODHD API
+    Fetch historical price data from EODHD API using API key from secrets
     """
+    api_key = st.secrets["eodhd_api_key"]
     base_url = f"https://eodhd.com/api/eod/{symbol}.US"
     params = {
         'api_token': api_key,
@@ -75,10 +77,11 @@ def fetch_historical_prices(symbol, api_key, start_date, end_date):
     return pd.DataFrame()
 
 @handle_api_error
-def fetch_news_data(symbol, api_key, start_date=None, end_date=None):
+def fetch_news_data(symbol, start_date=None, end_date=None):
     """
-    Fetch news data from EODHD API
+    Fetch news data from EODHD API using API key from secrets
     """
+    api_key = st.secrets["eodhd_api_key"]
     base_url = "https://eodhd.com/api/news"
     params = {
         'api_token': api_key,

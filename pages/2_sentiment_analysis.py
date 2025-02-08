@@ -142,7 +142,6 @@ def news_analysis_tab():
                 # Fetch news for the market data period
                 news_data = fetch_news_data(
                     symbol=st.session_state.symbol,
-                    api_key=st.session_state.eodhd_api_key,
                     start_date=start_date,
                     end_date=end_date
                 )
@@ -211,17 +210,10 @@ def news_analysis_tab():
 def reddit_analysis_tab():
     st.header("Reddit Analysis")
     
-    if not (st.session_state.get('reddit_client_id') and st.session_state.get('reddit_client_secret')):
-        st.warning("Please provide Reddit API credentials in the sidebar")
-        return
-        
     if st.button("Fetch Reddit Data"):
         with st.spinner("Fetching Reddit data..."):
             try:
-                reddit_analyzer = RedditAnalyzer(
-                    st.session_state.reddit_client_id,
-                    st.session_state.reddit_client_secret
-                )
+                reddit_analyzer = RedditAnalyzer()  # No need to pass credentials anymore
                 
                 # Get market data date range
                 start_date = st.session_state.market_data['Date'].min()
