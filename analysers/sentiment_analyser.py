@@ -1,6 +1,13 @@
 import warnings
 import os
+import sys
+from pathlib import Path
 
+# Add the parent directory to Python path
+current_dir = Path(__file__).resolve().parent
+if str(current_dir) not in sys.path:
+    sys.path.append(str(current_dir))
+    
 # Add these lines at the very top of your file, before any other imports
 warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', message='.*torch.classes.*')
@@ -13,6 +20,18 @@ from textblob import TextBlob
 from typing import Dict, List, Optional, Union
 import logging
 
+try:
+    # Try different import paths
+    try:
+        from .finbert_analyser import FinBERTAnalyser  # Same directory
+    except ImportError:
+        try:
+            from analysers.finbert_analyser import FinBERTAnalyser  # From package
+        except ImportError:
+            from finbert_analyser import FinBERTAnalyser  # Direct import
+except ImportError as e:
+    logging.error(f"Could not import FinBERTAnalyser: {str(e)}")
+    FinBERTAnalyser = None
 
 class FinancialSentimentAnalyser:
     def __init__(self):
@@ -38,31 +57,32 @@ class FinancialSentimentAnalyser:
             self.vader = None
             self.models['vader'] = False
         
-        # Initialise FinBERT quietly
+        # Initialise FinBERT
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                from transformers import AutoTokeniser, AutoModelForSequenceClassification
-                self.finbert_tokeniser = AutoTokeniser.from_pretrained('ProsusAI/finbert')
-                self.finbert_model = AutoModelForSequenceClassification.from_pretrained('ProsusAI/finbert')
+            if FinBERTAnalyser is not None:
+                self.finbert = FinBERTAnalyser()
                 self.models['finbert'] = True
-                # Update weights if FinBERT is available
-                if self.vader:
-                    self.model_weights.update({
-                        'textblob': 0.2,
-                        'vader': 0.3,
-                        'finbert': 0.5
-                    })
-                else:
-                    self.model_weights.update({
-                        'textblob': 0.3,
-                        'vader': 0.0,
-                        'finbert': 0.7
-                    })
-        except:
-            self.finbert_tokeniser = None
-            self.finbert_model = None
+            else:
+                self.finbert = None
+                self.models['finbert'] = False
+                logging.warning("FinBERT is not available - continuing without it")
+            # Update weights if FinBERT is available
+            if self.vader:
+                self.model_weights.update({
+                    'textblob': 0.2,
+                    'vader': 0.3,
+                    'finbert': 0.5
+                })
+            else:
+                self.model_weights.update({
+                    'textblob': 0.3,
+                    'vader': 0.0,
+                    'finbert': 0.7
+                })
+        except Exception as e:
+            self.finbert = None
             self.models['finbert'] = False
+            logging.error(f"Error initialising FinBERT: {str(e)}")
         
         # Normalise weights based on available models
         self._normalise_weights()
@@ -156,28 +176,17 @@ class FinancialSentimentAnalyser:
         Returns:
             Optional[Dict]: Sentiment analysis results or None if FinBERT unavailable
         """
-        if not self.finbert_model or not self.finbert_tokeniser:
+        if not self.finbert:
             return None
             
         try:
-            import torch
-            
-            inputs = self.finbert_tokeniser(text, return_tensors="pt", padding=True, truncation=True)
-            outputs = self.finbert_model(**inputs)
-            probabilities = torch.nn.functional.softmax(outputs.logits, dim=1)
-            
-            sentiment_score = probabilities[0][0].item() - probabilities[0][2].item()
-            confidence = torch.max(probabilities).item()
+            result = self.finbert.analyse_text(text)
             
             return {
-                'score': sentiment_score,
-                'confidence': confidence,
+                'score': result['score'],
+                'confidence': result['confidence'],
                 'model': 'finbert',
-                'detail_scores': {
-                    'positive': probabilities[0][0].item(),
-                    'negative': probabilities[0][2].item(),
-                    'neutral': probabilities[0][1].item()
-                }
+                'detail_scores': result['probabilities']
             }
         except Exception as e:
             self.logger.error(f"FinBERT analysis error: {str(e)}")
