@@ -11,3 +11,4 @@ torch
 nltk
 numpy
 python-dateutil
+tweepy
