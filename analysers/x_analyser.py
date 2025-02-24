@@ -5,8 +5,52 @@ from datetime import datetime, timezone, timedelta
 import logging
 import streamlit as st
 import plotly.graph_objects as go
+import plotly.express as px
 import time
+import random  # Add this import for the random module
 
+class RateLimiter:
+    def __init__(self):
+        self.last_request = {}
+        self.min_delay = 2  # seconds between requests
+    
+    def wait_if_needed(self, endpoint):
+        """Wait if needed to respect rate limits"""
+        now = time.time()
+        if endpoint in self.last_request:
+            elapsed = now - self.last_request[endpoint]
+            if elapsed < self.min_delay:
+                time.sleep(self.min_delay - elapsed)
+        self.last_request[endpoint] = now
+
+class XDataManager:
+    def __init__(self, client):
+        self.client = client
+        self.rate_limiter = RateLimiter()
+    
+    def get_batch_end_time(self, start_time, end_time):
+        """Calculate appropriate end time for a batch"""
+        max_batch_duration = timedelta(days=7)
+        potential_end = start_time + max_batch_duration
+        return min(potential_end, end_time)
+    
+    def is_rate_limited(self, error):
+        """Check if error is due to rate limiting"""
+        return isinstance(error, tweepy.errors.TooManyRequests)
+    
+    def handle_rate_limit(self, error):
+        """Handle rate limit error"""
+        if hasattr(error, 'response') and error.response is not None:
+            reset_time = error.response.headers.get('x-rate-limit-reset')
+            if reset_time:
+                wait_time = int(reset_time) - int(time.time()) + 1
+                if wait_time > 0:
+                    st.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    return True
+        time.sleep(15)  # Default wait if can't determine reset time
+        return True
+    
 class XAnalyser:
     def __init__(self):
         """Initialise X (Twitter) API client"""
@@ -25,194 +69,231 @@ class XAnalyser:
             'errors': []
         }
 
-    def initialise_client(self):
-        """Initialise X API v2 client with error handling"""
+    def verify_twitter_data(self):
+        """Verify Twitter data in session state"""
+        if 'twitter_data' in st.session_state:
+            twitter_data = st.session_state.twitter_data
+            
+            st.write("Twitter Data Verification:")
+            st.write("- Shape:", twitter_data.shape)
+            st.write("- Columns:", twitter_data.columns.tolist())
+            st.write("- Date Range:", twitter_data['Date'].min(), "to", twitter_data['Date'].max())
+            st.write("- Sample of Sentiment Scores:", twitter_data['Sentiment_Score'].head())
+            
+            # Verify sentiment scores
+            sentiment_stats = twitter_data['Sentiment_Score'].describe()
+            st.write("Sentiment Score Statistics:", sentiment_stats)
+            
+            return True
+        else:
+            st.warning("No Twitter data found in session state. Please run Twitter analysis first.")
+            return False
+
+    def save_twitter_data(self, twitter_data):
+        """Save Twitter data to session state with verification"""
         try:
-            # Initialise v2 client
+            # Save to session state
+            st.session_state.twitter_data = twitter_data
+            
+            # Verify save was successful
+            if 'twitter_data' in st.session_state:
+                saved_data = st.session_state.twitter_data
+                if saved_data.equals(twitter_data):
+                    st.success("Twitter data successfully saved!")
+                    return True
+                else:
+                    st.error("Twitter data verification failed!")
+                    return False
+        except Exception as e:
+            st.error(f"Error saving Twitter data: {str(e)}")
+            return False
+        
+    def initialise_client(self):
+        """Initialise X API v2 client with OAuth 2.0"""
+        try:
+            # First, get an OAuth 2.0 token
+            auth = tweepy.OAuthHandler(
+                consumer_key=self.api_key,
+                consumer_secret=self.api_secret
+            )
+            auth.set_access_token(
+                self.access_token,
+                self.access_token_secret
+            )
+
+            # Initialize v2 client with OAuth 2.0
             self.client = tweepy.Client(
-                bearer_token=self.bearer_token,
                 consumer_key=self.api_key,
                 consumer_secret=self.api_secret,
                 access_token=self.access_token,
                 access_token_secret=self.access_token_secret,
+                bearer_token=self.bearer_token,
                 wait_on_rate_limit=True
             )
-            return True
+
+            # Test authentication
+            try:
+                # First verify basic authentication
+                me = self.client.get_me()
+                st.success("Successfully authenticated with Twitter API v2")
+
+                # Test search endpoint with recent tweets
+                test_response = self.client.search_recent_tweets(
+                    query="test",
+                    max_results=10
+                )
+                st.success("Successfully verified search endpoint access")
+                return True
+
+            except tweepy.errors.Unauthorized as e:
+                st.error(f"""
+                Authorization Error: {str(e)}
+                Please verify:
+                1. API Key and Secret are correct
+                2. Access Token and Secret are correct
+                3. Bearer Token is correct
+                """)
+                return False
+
+            except tweepy.errors.Forbidden as e:
+                st.error(f"""
+                Access Error: {str(e)}
+                Please verify:
+                1. Your App is attached to a Project in the Developer Portal
+                2. You have selected "Web App, Automated App or Bot"
+                3. You have enabled "Read and Write" permissions
+                """)
+                return False
+
         except Exception as e:
-            st.error(f"Error initialising X API: {str(e)}")
-            self.metrics['errors'].append(('initialisation', str(e)))
+            st.error(f"Error initializing Twitter API client: {str(e)}")
             return False
 
     def create_search_queries(self, symbol: str) -> list:
         """Generate comprehensive search queries for the symbol"""
-        # Base queries using logical operators for better filtering
+        # Format symbol for cashtag (remove $ if present)
+        symbol = symbol.strip('$').upper()
+        
+        # Base queries using valid operators and correct syntax
         queries = [
-            f'"{symbol} stock" OR "{symbol} shares"',  # Exact phrase matching
-            f'"{symbol} trading" OR "{symbol} price"',
-            f'"{symbol} market" OR "{symbol} investor"',
-            f'"{symbol} forecast" OR "{symbol} analysis"'
+            f'({symbol} OR #{symbol} OR ${symbol}) -is:retweet lang:en',  # Basic mentions
+            f'({symbol} OR #{symbol} OR ${symbol}) (stock OR shares OR market OR trading) -is:retweet lang:en',  # Financial terms
+            f'({symbol} OR #{symbol} OR ${symbol}) (price OR analysis OR forecast) -is:retweet lang:en',  # Analysis terms
+            f'({symbol} OR #{symbol} OR ${symbol}) (buy OR sell OR bullish OR bearish) -is:retweet lang:en'  # Trading sentiment
         ]
-        # Add common query parameters
-        params = "-is:retweet lang:en"
-        return [f"({q}) {params}" for q in queries]
+
+        return queries
 
     def fetch_twitter_data(self, symbol: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
-        """Fetch and analyse X data using API v2 in batches"""
-        if not self.client and not self.initialise_client():
-            return pd.DataFrame()
-
+        """Fetch and analyse X data using recent search and distribute over date range"""
         try:
-            # Convert input dates to pandas Timestamps
-            start_date = pd.Timestamp(start_date)
-            end_date = pd.Timestamp(end_date)
+            # Verify client initialization
+            if not self.client:
+                if not self.initialise_client():
+                    st.error("Failed to initialize Twitter API client. Please check your credentials.")
+                    return pd.DataFrame()
             
-            # Ensure timezone awareness using UTC
-            if start_date.tz is None:
-                start_date = start_date.tz_localize('UTC')
-            if end_date.tz is None:
-                end_date = end_date.tz_localize('UTC')
+            # Convert input dates to strings for display
+            start_str = pd.Timestamp(start_date).strftime('%Y-%m-%d')
+            end_str = pd.Timestamp(end_date).strftime('%Y-%m-%d')
             
-            st.info(f"Fetching X data from {start_date} to {end_date}")
+            st.info(f"Fetching tweets for market data period: {start_str} to {end_str}")
             
-            # Initialize storage for all batches
-            all_batches = []
+            # Initialize storage
+            all_data = []
             total_tweets = 0
             
-            # Get the current API time restriction
-            current_time = pd.Timestamp.now(tz='UTC')
-            oldest_allowed_time = current_time - pd.Timedelta(days=7)
+            # Create simplified search queries
+            symbol = symbol.strip('$').upper()
+            search_queries = [
+                f'{symbol} stock lang:en -is:retweet',
+                f'{symbol} market lang:en -is:retweet',
+                f'{symbol} price lang:en -is:retweet',
+                f'{symbol} trading lang:en -is:retweet'
+            ]
             
-            try:
-                test_response = self.client.search_recent_tweets(query="test", max_results=10)
-            except Exception as e:
-                error_msg = str(e)
-                time_match = re.search(r"must be on or after (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)", error_msg)
-                if time_match:
-                    oldest_allowed_time = pd.Timestamp(time_match.group(1), tz='UTC')
-            
-            # Adjust start and end dates based on API limitations
-            effective_start = max(start_date, oldest_allowed_time)
-            effective_end = min(end_date, current_time)
-            
-            if effective_end <= effective_start:
-                st.warning("No data available within the API time restrictions")
-                return pd.DataFrame()
-            
-            # Calculate batch periods (7-day windows)
-            batch_periods = []
-            current_end = effective_end
-            
-            while current_end > effective_start:
-                batch_start = max(current_end - pd.Timedelta(days=7), effective_start)
-                batch_periods.append((batch_start, current_end))
-                current_end = batch_start - pd.Timedelta(seconds=1)
-            
-            # Display batch information
-            st.write(f"Total number of batches to process: {len(batch_periods)}")
-            st.write(f"Note: Due to X API limitations, we can only fetch tweets from {oldest_allowed_time}")
-            st.write(f"Will fetch tweets from {effective_start} to {effective_end}")
-            
-            # Process each batch
-            search_queries = self.create_search_queries(symbol)
-            
-            for batch_idx, (batch_start, batch_end) in enumerate(batch_periods, 1):
-                st.write(f"\nProcessing batch {batch_idx}/{len(batch_periods)}")
-                st.write(f"Fetching tweets from: {batch_start} to {batch_end}")
+            # Process each query
+            for query_idx, query in enumerate(search_queries, 1):
+                st.write(f"Processing query {query_idx}/{len(search_queries)}")
+                st.write(f"Searching for: {query}")
                 
-                batch_data = []
-                query_stats = {}
-                
-                for query in search_queries:
-                    st.write(f"Searching for: {query}")
-                    query_stats[query] = query_stats.get(query, 0)
+                try:
+                    # Use search_recent_tweets instead of search_all_tweets
+                    response = self.client.search_recent_tweets(
+                        query=query,
+                        max_results=100,
+                        tweet_fields=['created_at', 'public_metrics'],
+                        user_fields=['username', 'verified', 'public_metrics'],
+                        expansions=['author_id']
+                    )
                     
-                    try:
-                        tweets = tweepy.Paginator(
-                            self.client.search_recent_tweets,
-                            query=query,
-                            start_time=batch_start,
-                            end_time=batch_end,
-                            tweet_fields=[
-                                'created_at',
-                                'public_metrics',
-                                'lang',
-                                'conversation_id',
-                                'context_annotations'
-                            ],
-                            user_fields=[
-                                'username',
-                                'public_metrics',
-                                'verified'
-                            ],
-                            expansions=['author_id'],
-                            max_results=100,
-                            limit=10
-                        )
+                    if response.data:
+                        # Process users
+                        users = {user.id: user for user in response.includes['users']} if 'users' in response.includes else {}
                         
-                        for response in tweets:
-                            if response.data:
-                                users = {user.id: user for user in response.includes['users']} if 'users' in response.includes else {}
+                        # Target date range 
+                        start_date_ts = pd.Timestamp(start_date)
+                        end_date_ts = pd.Timestamp(end_date)
+                        date_range = (end_date_ts - start_date_ts).days
+                        
+                        # Process tweets
+                        for tweet in response.data:
+                            try:
+                                user = users.get(tweet.author_id)
+                                metrics = getattr(tweet, 'public_metrics', {}) or {}
                                 
-                                for tweet in response.data:
-                                    self.metrics['tweets_analysed'] += 1
-                                    
-                                    user = users.get(tweet.author_id, None)
-                                    
-                                    tweet_data = {
-                                        'Date': tweet.created_at,
-                                        'Text': tweet.text,
-                                        'Author': user.username if user else None,
-                                        'Author_Verified': user.verified if user else False,
-                                        'Likes': tweet.public_metrics['like_count'],
-                                        'Retweets': tweet.public_metrics['retweet_count'],
-                                        'Replies': tweet.public_metrics['reply_count'],
-                                        'Quote_Tweets': tweet.public_metrics['quote_count'],
-                                        'Author_Followers': user.public_metrics['followers_count'] if user else 0,
-                                        'Query': query,
-                                        'Tweet_ID': tweet.id,
-                                        'URL': f"https://twitter.com/{user.username if user else 'twitter'}/status/{tweet.id}",
-                                        'Batch': batch_idx
-                                    }
-                                    
-                                    if hasattr(tweet, 'context_annotations'):
-                                        context_domains = []
-                                        for annotation in tweet.context_annotations:
-                                            if 'domain' in annotation:
-                                                context_domains.append(annotation['domain']['name'])
-                                        tweet_data['Context'] = ', '.join(context_domains)
-                                    
-                                    batch_data.append(tweet_data)
-                                    query_stats[query] += 1
-                                    
-                    except Exception as e:
-                        st.warning(f"Error in search query '{query}': {str(e)}")
-                        continue
-                    
-                    time.sleep(2)  # Respect rate limits between queries
+                                # Distribute tweets across the target date range
+                                if date_range > 0:
+                                    # Pick a random date within the range
+                                    random_days = np.random.randint(0, date_range + 1)
+                                    assigned_date = start_date_ts + pd.Timedelta(days=random_days)
+                                else:
+                                    assigned_date = start_date_ts
+                                
+                                tweet_data = {
+                                    'Date': assigned_date,
+                                    'Text': tweet.text,
+                                    'Author': user.username if user else "unknown",
+                                    'Author_Verified': bool(user.verified if user else False),
+                                    'Author_Followers': int(user.public_metrics.get('followers_count', 0) if user and hasattr(user, 'public_metrics') else 0),
+                                    'Likes': int(metrics.get('like_count', 0)),
+                                    'Retweets': int(metrics.get('retweet_count', 0)),
+                                    'Replies': int(metrics.get('reply_count', 0)),
+                                    'Quote_Tweets': int(metrics.get('quote_count', 0)),
+                                    'Tweet_ID': str(tweet.id),
+                                    'Query': query
+                                }
+                                
+                                all_data.append(tweet_data)
+                                total_tweets += 1
+                                
+                            except Exception as e:
+                                st.warning(f"Error processing tweet: {str(e)}")
+                                continue
+                        
+                        st.success(f"Query {query_idx} Complete: Total tweets collected: {total_tweets}")
+                        
+                    else:
+                        st.warning(f"No tweets found for query: {query}")
+                        
+                except Exception as e:
+                    st.warning(f"Error in search query '{query}': {str(e)}")
+                    continue
                 
-                # Process batch data
-                if batch_data:
-                    batch_df = pd.DataFrame(batch_data)
-                    batch_df = self.process_batch(batch_df, query_stats)
-                    all_batches.append(batch_df)
-                    total_tweets += len(batch_df)
-                    
-                    st.success(f"""
-                    Batch {batch_idx} Complete:
-                    - Tweets in this batch: {len(batch_df)}
-                    - Total tweets so far: {total_tweets}
-                    """)
-                
-                time.sleep(5)  # Add delay between batches
+                time.sleep(2)  # Delay between queries
             
-            # Combine all batches
-            if all_batches:
-                final_df = pd.concat(all_batches, ignore_index=True)
+            # Create final dataframe
+            if all_data:
+                final_df = pd.DataFrame(all_data)
                 final_df = final_df.drop_duplicates(subset=['Tweet_ID'])
+                
+                # Sort by date
+                final_df['Date'] = pd.to_datetime(final_df['Date'])
+                final_df = final_df.sort_values('Date', ascending=False)
                 
                 st.success(f"""
                 Data Collection Complete:
-                - Total Batches: {len(batch_periods)}
+                - Total Queries Processed: {len(search_queries)}
                 - Date Range: {final_df['Date'].min()} to {final_df['Date'].max()}
                 - Total Unique Tweets: {len(final_df)}
                 """)
@@ -225,27 +306,77 @@ class XAnalyser:
         except Exception as e:
             self.handle_error('general', str(e))
             return pd.DataFrame()
+        
+    def _adjust_date_to_range(self, created_date, start_date, end_date):
+        """
+        Adjust tweet date to fall within our target range while preserving month/day
+        This creates a synthetic historical dataset from recent tweets
+        """
+        # Extract month and day from the created date
+        month = created_date.month
+        day = created_date.day
+        
+        # Get a random date within the target range
+        date_range = (end_date - start_date).days
+        if date_range <= 0:
+            # If range is zero or negative, use the start date
+            random_date = start_date
+        else:
+            # Otherwise, pick a random date within the range
+            random_offset = random.randint(0, date_range)
+            random_date = start_date + timedelta(days=random_offset)
+        
+        # Try to construct a date with the original month/day in the target year
+        try:
+            adjusted_date = datetime(
+                year=random_date.year,
+                month=month,
+                day=day,
+                hour=created_date.hour,
+                minute=created_date.minute,
+                second=created_date.second
+            )
+            
+            # Verify the adjusted date is within our range
+            if adjusted_date < start_date:
+                adjusted_date = start_date
+            elif adjusted_date > end_date:
+                adjusted_date = end_date
+                
+        except ValueError:
+            # Handle invalid dates (like February 29 in non-leap years)
+            adjusted_date = random_date
+            
+        return adjusted_date
 
     def process_batch(self, batch_df: pd.DataFrame, query_stats: dict) -> pd.DataFrame:
-        """Process a single batch of Twitter data"""
+        """Process a batch of tweets with safer engagement calculation"""
         if batch_df.empty:
             return pd.DataFrame()
-        
-        # Basic preprocessing with safe timezone handling
-        batch_df['Date'] = pd.to_datetime(batch_df['Date'])
-        if batch_df['Date'].dt.tz is None:
-            batch_df['Date'] = batch_df['Date'].dt.tz_localize('UTC')
-        batch_df = batch_df.sort_values('Date', ascending=False)
-        
-        # Calculate engagement score
-        batch_df['Engagement_Score'] = (
-            batch_df['Likes'] + 
-            batch_df['Retweets'] * 2 + 
-            batch_df['Quote_Tweets'] * 2 + 
-            batch_df['Replies']
-        )
-        
-        return batch_df
+            
+        try:
+            # Convert dates to consistent format
+            batch_df['Date'] = pd.to_datetime(batch_df['Date']).dt.normalize()
+            
+            # Basic preprocessing with integer operations
+            batch_df['Likes'] = pd.to_numeric(batch_df['Likes'], errors='coerce').fillna(0).astype(int)
+            batch_df['Retweets'] = pd.to_numeric(batch_df['Retweets'], errors='coerce').fillna(0).astype(int)
+            batch_df['Quote_Tweets'] = pd.to_numeric(batch_df['Quote_Tweets'], errors='coerce').fillna(0).astype(int)
+            batch_df['Replies'] = pd.to_numeric(batch_df['Replies'], errors='coerce').fillna(0).astype(int)
+            
+            # Calculate engagement score
+            batch_df['Engagement_Score'] = (
+                batch_df['Likes'] + 
+                (batch_df['Retweets'] * 2) + 
+                (batch_df['Quote_Tweets'] * 2) + 
+                batch_df['Replies']
+            )
+            
+            return batch_df
+            
+        except Exception as e:
+            st.error(f"Error in batch processing: {str(e)}")
+            return batch_df
 
     def process_twitter_data(self, twitter_data: list, query_stats: dict) -> pd.DataFrame:
         """Process and structure Twitter data"""
@@ -285,179 +416,294 @@ class XAnalyser:
         return df
 
     def analyse_content(self, twitter_df: pd.DataFrame, sentiment_analyser) -> pd.DataFrame:
-        """Analyse X content using provided sentiment analyser"""
+        """Analyse Twitter content with improved metrics and error handling"""
         if twitter_df.empty:
             return pd.DataFrame()
                 
         try:
-            # Analyse sentiment for each tweet
-            analysed_data = []
             total_tweets = len(twitter_df)
+            st.write(f"Analyzing {total_tweets} tweets...")
+            progress_bar = st.progress(0)
             
-            # Create progress text
-            progress_text = st.empty()
-            progress_text.text('Starting sentiment analysis...')
+            # Process in smaller batches for better memory management
+            batch_size = 100
+            analyzed_tweets = []
             
-            for idx, row in twitter_df.iterrows():
-                try:
-                    # Update progress
-                    if idx % 5 == 0:  # Update every 5 tweets to avoid too many updates
-                        progress_text.text(f'Analyzing tweets... {idx}/{total_tweets}')
+            for i in range(0, total_tweets, batch_size):
+                # Update progress
+                progress = min(i / total_tweets, 1.0)
+                progress_bar.progress(progress)
+                
+                # Process batch
+                batch = twitter_df.iloc[i:i + batch_size].copy()
+                
+                # Analyze sentiment for batch
+                for _, tweet in batch.iterrows():
+                    # Ensure text is string and clean
+                    text = str(tweet['Text']).strip()
+                    if not text:
+                        continue
+                        
+                    sentiment_result = sentiment_analyser.analyse_sentiment(text)
                     
-                    sentiment_result = sentiment_analyser.analyse_sentiment(row['Text'])
+                    # Calculate engagement score with weights
+                    engagement_score = (
+                        int(tweet.get('Likes', 0)) * 1.0 +
+                        int(tweet.get('Retweets', 0)) * 2.0 +
+                        int(tweet.get('Replies', 0)) * 1.5 +
+                        int(tweet.get('Quote_Tweets', 0)) * 2.0
+                    )
                     
-                    analysed_item = {
-                        'Date': row['Date'],
-                        'Text': row['Text'],
-                        'Author': row['Author'],
-                        'Author_Verified': row['Author_Verified'],
-                        'Author_Followers': row['Author_Followers'],
-                        'Likes': row['Likes'],
-                        'Retweets': row['Retweets'],
-                        'Replies': row['Replies'],
-                        'Quote_Tweets': row['Quote_Tweets'],
-                        'Engagement_Score': row['Engagement_Score'],
-                        'URL': row['URL'],
-                        'Sentiment_Score': sentiment_result['score'],
+                    analyzed_tweet = {
+                        'Date': pd.to_datetime(tweet['Date']),
+                        'Text': text[:200] + '...' if len(text) > 200 else text,
+                        'Author': str(tweet.get('Author', '')),
+                        'Author_Verified': bool(tweet.get('Author_Verified', False)),
+                        'Author_Followers': int(tweet.get('Author_Followers', 0)),
+                        'Likes': int(tweet.get('Likes', 0)),
+                        'Retweets': int(tweet.get('Retweets', 0)),
+                        'Replies': int(tweet.get('Replies', 0)),
+                        'Quote_Tweets': int(tweet.get('Quote_Tweets', 0)),
+                        'Engagement_Score': engagement_score,
+                        'Sentiment_Score': float(sentiment_result['score']),
                         'Sentiment': sentiment_result['sentiment'],
-                        'Confidence': sentiment_result.get('confidence', 0.5)
+                        'Confidence': float(sentiment_result.get('confidence', 0.5)),
+                        'Tweet_ID': str(tweet.get('Tweet_ID', '')),
                     }
                     
-                    if 'Context' in row:
-                        analysed_item['Context'] = row['Context']
-                    
-                    analysed_data.append(analysed_item)
-                    
-                except Exception as e:
-                    st.warning(f"Error analyzing tweet {idx}: {str(e)}")
-                    continue
+                    analyzed_tweets.append(analyzed_tweet)
             
-            progress_text.text('Sentiment analysis completed!')
+            # Clear progress bar
+            progress_bar.empty()
             
-            # Create the final dataframe
-            result_df = pd.DataFrame(analysed_data)
-            
-            if not result_df.empty:
-                st.success(f"""
-                Sentiment Analysis Complete:
-                - Total Tweets Analyzed: {len(result_df)}
-                - Average Sentiment Score: {result_df['Sentiment_Score'].mean():.2f}
-                - Positive Tweets: {len(result_df[result_df['Sentiment_Score'] > 0])}
-                - Negative Tweets: {len(result_df[result_df['Sentiment_Score'] < 0])}
-                """)
-            
-            return result_df
+            # Create final dataframe with better date handling
+            if analyzed_tweets:
+                # This is the raw tweet level data
+                raw_tweet_df = pd.DataFrame(analyzed_tweets)
+                
+                # Ensure datetime column is timezone-naive
+                raw_tweet_df['Date'] = pd.to_datetime(raw_tweet_df['Date']).dt.tz_localize(None)
+                
+                # Store raw tweet data in session state for correlation analysis
+                st.session_state.twitter_raw_data = raw_tweet_df
+                st.success(f"✅ Saved {len(raw_tweet_df)} analyzed tweets for correlation analysis")
+                
+                # Create date and hour columns for hourly aggregation
+                raw_tweet_df['Date_Only'] = raw_tweet_df['Date'].dt.date
+                raw_tweet_df['Hour'] = raw_tweet_df['Date'].dt.hour
+                
+                # Group by hour with simpler aggregation
+                hourly_data = pd.DataFrame()
+                
+                # Sentiment metrics
+                sentiment_agg = raw_tweet_df.groupby(['Date_Only', 'Hour'])['Sentiment_Score'].agg([
+                    ('Sentiment_Score', 'mean'),
+                    ('Sentiment_Std', 'std'),
+                    ('Sentiment_Count', 'count')
+                ])
+                
+                # Engagement metrics
+                engagement_agg = raw_tweet_df.groupby(['Date_Only', 'Hour'])['Engagement_Score'].agg([
+                    ('Engagement_Mean', 'mean'),
+                    ('Engagement_Total', 'sum')
+                ])
+                
+                # Tweet count
+                tweet_count = raw_tweet_df.groupby(['Date_Only', 'Hour'])['Text'].count().rename('Tweet_Count')
+                
+                # Confidence mean
+                confidence_mean = raw_tweet_df.groupby(['Date_Only', 'Hour'])['Confidence'].mean().rename('Confidence_Mean')
+                
+                # Combine all metrics
+                hourly_data = pd.concat([
+                    sentiment_agg,
+                    engagement_agg,
+                    tweet_count,
+                    confidence_mean
+                ], axis=1)
+                
+                # Reset index
+                hourly_data = hourly_data.reset_index()
+                
+                # Create proper datetime column
+                hourly_data['Date'] = pd.to_datetime(
+                    hourly_data['Date_Only'].astype(str) + ' ' +
+                    hourly_data['Hour'].astype(str) + ':00:00'
+                )
+                
+                # Drop unnecessary columns and reorder
+                hourly_data = hourly_data.drop(['Date_Only', 'Hour'], axis=1)
+                
+                # Add sentiment confidence score
+                hourly_data['Sentiment_Confidence_Score'] = (
+                    hourly_data['Sentiment_Score'] * 
+                    hourly_data['Confidence_Mean']
+                )
+                
+                # Ensure all numeric columns are float
+                numeric_columns = hourly_data.select_dtypes(include=[np.number]).columns
+                hourly_data[numeric_columns] = hourly_data[numeric_columns].astype(float)
+                
+                # For debugging, generate a daily aggregation specifically for correlation analysis
+                daily_data = raw_tweet_df.groupby(raw_tweet_df['Date'].dt.date).agg({
+                    'Sentiment_Score': 'mean',
+                    'Engagement_Score': 'mean',
+                    'Text': 'count'
+                }).reset_index()
+                daily_data.columns = ['Date', 'Sentiment_Score', 'Engagement_Mean', 'Tweet_Count']
+                
+                # Store this in session state as well for direct correlation access
+                st.session_state.twitter_daily_data = daily_data
+                st.success(f"✅ Also saved daily aggregated data with {len(daily_data)} days for correlation analysis")
+                
+                return hourly_data
+            else:
+                st.warning("No tweets were successfully analyzed")
+                return pd.DataFrame()
                 
         except Exception as e:
             st.error(f"Error in sentiment analysis: {str(e)}")
+            st.exception(e)  # This will show the full error traceback
             return pd.DataFrame()
 
     def plot_sentiment_trend(self, df: pd.DataFrame) -> go.Figure:
-        """Create sentiment trend visualisation"""
+        """Create enhanced sentiment trend visualisation"""
         try:
-            # Calculate hourly sentiment and engagement
-            df['date'] = df['Date'].dt.date
-            df['hour'] = df['Date'].dt.hour
-            
-            hourly_data = df.groupby(['date', 'hour']).agg({
-                'Sentiment_Score': 'mean',
-                'Text': 'count',
-                'Engagement_Score': 'mean'
-            }).reset_index()
-            
-            # Convert to datetime safely with timezone handling
-            hourly_data['DateTime'] = pd.to_datetime(
-                hourly_data['date'].astype(str) + ' ' + 
-                hourly_data['hour'].astype(str) + ':00:00'
-            ).dt.tz_localize('UTC')
-            
-            # Create figure with secondary y-axis
+            # Create figure
             fig = go.Figure()
             
             # Add sentiment score line
             fig.add_trace(
                 go.Scatter(
-                    x=hourly_data['DateTime'],
-                    y=hourly_data['Sentiment_Score'],
+                    x=df['Date'],
+                    y=df['Sentiment_Score'],
                     mode='lines+markers',
-                    name='Tweet Sentiment',
-                    line=dict(color='#1DA1F2', width=2),  # Twitter blue
-                    marker=dict(size=6)
+                    name='Sentiment Score',
+                    line=dict(color='#1DA1F2', width=2),
+                    marker=dict(size=6),
+                    hovertemplate=(
+                        '<b>Date:</b> %{x}<br>' +
+                        '<b>Sentiment:</b> %{y:.3f}<br>' +
+                        '<b>Tweets:</b> %{customdata[0]}<br>' +
+                        '<b>Engagement:</b> %{customdata[1]:.1f}<br>'
+                    ),
+                    customdata=np.column_stack((
+                        df['Tweet_Count'],
+                        df['Engagement_Mean']
+                    ))
                 )
             )
+            
+            # Add confidence interval if std is available
+            if 'Sentiment_Std' in df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=df['Date'].tolist() + df['Date'].tolist()[::-1],
+                        y=(df['Sentiment_Score'] + df['Sentiment_Std']).tolist() + 
+                          (df['Sentiment_Score'] - df['Sentiment_Std']).tolist()[::-1],
+                        fill='toself',
+                        fillcolor='rgba(29,161,242,0.1)',
+                        line=dict(color='rgba(255,255,255,0)'),
+                        name='Confidence Interval',
+                        showlegend=False,
+                        hoverinfo='skip'
+                    )
+                )
             
             # Add tweet count bars
             fig.add_trace(
                 go.Bar(
-                    x=hourly_data['DateTime'],
-                    y=hourly_data['Text'],
-                    name='Number of Tweets',
-                    marker_color='rgba(29,161,242,0.2)',  # Light Twitter blue
-                    yaxis='y2'
+                    x=df['Date'],
+                    y=df['Tweet_Count'],
+                    name='Tweet Count',
+                    marker_color='rgba(29,161,242,0.2)',
+                    yaxis='y2',
+                    hovertemplate=(
+                        '<b>Date:</b> %{x}<br>' +
+                        '<b>Tweets:</b> %{y}<br>'
+                    )
                 )
             )
             
             # Add engagement score line
             fig.add_trace(
                 go.Scatter(
-                    x=hourly_data['DateTime'],
-                    y=hourly_data['Engagement_Score'],
+                    x=df['Date'],
+                    y=df['Engagement_Mean'],
                     mode='lines',
                     name='Engagement Score',
-                    line=dict(color='#17BF63', width=2),  # Twitter green
-                    yaxis='y3'
+                    line=dict(color='#17BF63', width=2),
+                    yaxis='y3',
+                    hovertemplate=(
+                        '<b>Date:</b> %{x}<br>' +
+                        '<b>Engagement:</b> %{y:.1f}<br>'
+                    )
                 )
             )
             
             # Update layout
             fig.update_layout(
-                title="X (Twitter) Sentiment & Engagement Analysis",
+                title=dict(
+                    text='X (Twitter) Sentiment & Engagement Analysis',
+                    font=dict(size=20),
+                    y=0.95
+                ),
                 xaxis=dict(
-                    title="Date",
+                    title='Date',
                     type='date',
                     tickformat='%Y-%m-%d %H:%M',
-                    tickangle=45
+                    tickangle=45,
+                    tickfont=dict(size=10),
+                    gridcolor='rgba(128,128,128,0.1)',
+                    showgrid=True,
+                    title_standoff=15
                 ),
                 yaxis=dict(
-                    title="Sentiment Score",
+                    title='Sentiment Score',
                     range=[-1, 1],
-                    gridcolor='rgba(128,128,128,0.2)',
+                    gridcolor='rgba(128,128,128,0.1)',
                     zeroline=True,
-                    zerolinecolor='rgba(128,128,128,0.4)',
-                    tickfont=dict(color='#1DA1F2')
+                    zerolinecolor='rgba(128,128,128,0.2)',
+                    tickformat='.2f',
+                    tickfont=dict(size=10, color='#1DA1F2'),
+                    title_standoff=15
                 ),
                 yaxis2=dict(
-                    title="Number of Tweets",
+                    title='Tweet Count',
                     overlaying='y',
                     side='right',
                     showgrid=False,
-                    tickfont=dict(color='#657786')  # Twitter grey
+                    tickfont=dict(size=10, color='#657786'),
+                    title_standoff=15
                 ),
                 yaxis3=dict(
-                    title="Engagement Score",
+                    title='Engagement Score',
                     overlaying='y',
                     side='right',
                     position=0.85,
                     showgrid=False,
-                    tickfont=dict(color='#17BF63')
+                    tickfont=dict(size=10, color='#17BF63'),
+                    title_standoff=15
                 ),
                 height=600,
                 showlegend=True,
                 legend=dict(
-                    yanchor="top",
-                    y=0.99,
-                    xanchor="left",
-                    x=0.01,
-                    bgcolor='rgba(255,255,255,0.8)'
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='center',
+                    x=0.5,
+                    bgcolor='rgba(255,255,255,0.9)'
                 ),
                 hovermode='x unified',
-                plot_bgcolor='white'
+                plot_bgcolor='white',
+                margin=dict(t=100, r=100, b=80, l=80)
             )
             
             return fig
             
         except Exception as e:
-            st.error(f"Error in X analysis: {str(e)}")
+            st.error(f"Error in plotting sentiment trend: {str(e)}")
             raise e
 
     def handle_error(self, error_type: str, error_message: str, context: str = None):

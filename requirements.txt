@@ -12,3 +12,7 @@ nltk
 numpy
 python-dateutil
 tweepy
+pytz
+tqdm
+scipy
+regex

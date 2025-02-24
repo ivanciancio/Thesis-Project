@@ -7,563 +7,458 @@ import streamlit as st
 
 class MarketPredictionAnalyser:
     def __init__(self):
-        """Initialise the prediction analyser"""
-        self.market_scaler = MinMaxScaler()
-        self.sentiment_scaler = MinMaxScaler()
+        self.sequence_length = 3
+        self.prediction_days = 2
+        self.market_features = [
+            'Open',
+            'High',
+            'Low',
+            'Close',
+            'Volume',
+            'adjusted_close'
+        ]
         self.market_model = None
         self.sentiment_enhanced_model = None
-        self.sequence_length = 5    # Increased from 2 to 5
-        self.prediction_days = 2
-        self.market_features = ['Close', 'Volume', 'Returns', 'Volatility', 
-                            'MA5', 'price_momentum', 'volume_momentum', 
-                            'recent_trend']  # Updated feature list
         self.used_features = None
-        
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
+        self.scaler = MinMaxScaler()
 
     def prepare_market_data(self, market_data):
-        """Prepare market data for Random Forest model."""
         try:
-            # Create a progress bar
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # Debug: Show initial data shape
-            st.write(f"Initial market data shape: {market_data.shape}")
-            
             data = market_data.copy()
             
-            # Calculate base features first
-            data['Returns'] = data['Close'].pct_change()
-            data['Volatility'] = data['Returns'].rolling(window=3).std()
-            data['MA5'] = data['Close'].rolling(window=3).mean()
-            
-            # Add momentum indicators
-            data['price_momentum'] = data['Close'].pct_change(5)  # 5-day momentum
-            data['volume_momentum'] = data['Volume'].pct_change(5)
-            data['recent_trend'] = data['Close'].pct_change(3).rolling(window=3).mean()
-            
-            # Debug: Show data after calculations
-            st.write("After technical indicators:")
-            st.write(data.head())
-            
-            # Remove NaN values
-            data = data.dropna()
-            
-            # Debug: Show data after removing NaN
-            st.write(f"Data shape after removing NaN: {data.shape}")
-            
-            min_required_points = self.sequence_length + self.prediction_days
-            if len(data) < min_required_points:
-                st.error(f"Not enough data points. Have {len(data)}, need at least {min_required_points}")
+            # Check data length
+            if len(data) < self.sequence_length + self.prediction_days:
+                st.error(f"Not enough data points. Need at least {self.sequence_length + self.prediction_days}")
                 return None, None
-            
-            # Create sequences using all features
+
+            # Verify features exist
+            missing_features = [f for f in self.market_features if f not in data.columns]
+            if missing_features:
+                st.error(f"Missing features: {missing_features}")
+                st.write("Available columns:", data.columns.tolist())
+                return None, None
+
             X = []
             y = []
-            features = ['Close', 'Volume', 'Returns', 'Volatility', 'MA5', 
-                       'price_momentum', 'volume_momentum', 'recent_trend']
             
-            # Debug: Show feature list
-            st.write(f"Using features: {features}")
+            # Use up to second-to-last entry to ensure we have room for prediction
+            valid_range = len(data) - self.prediction_days
             
-            for i in range(len(data) - self.sequence_length - self.prediction_days + 1):
-                sequence = data.iloc[i:(i + self.sequence_length)][features].values
+            for i in range(valid_range - self.sequence_length + 1):
+                sequence = []
+                for j in range(self.sequence_length):
+                    row = data.iloc[i + j][self.market_features].values
+                    sequence.extend(row)
+                
                 target = data.iloc[i + self.sequence_length:i + self.sequence_length + self.prediction_days]['Close'].values
                 
                 if len(target) == self.prediction_days:
-                    X.append(sequence.flatten())
+                    X.append(sequence)
                     y.append(target)
-            
-            # Debug: Show sequence info
-            st.write(f"Number of sequences created: {len(X)}")
-            if len(X) > 0:
-                st.write(f"Shape of first sequence: {len(X[0])}")
-            
-            # Convert to numpy arrays
+
+            if not X:
+                st.error("No valid sequences could be created")
+                return None, None
+
             X = np.array(X)
             y = np.array(y)
+            X = self.scaler.fit_transform(X)
             
-            if len(X) == 0 or len(y) == 0:
+            return X, y
+            
+        except Exception as e:
+            st.error(f"Error in prepare_market_data: {str(e)}")
+            return None, None
+
+    def prepare_sentiment_enhanced_data(self, market_data, news_data):
+        """
+        Prepare market and sentiment data for training with better error handling
+        and robust column name detection - with specific error fix
+        """
+        try:
+            # Input validation
+            if market_data is None or news_data is None:
+                st.error("Missing input data")
+                return None, None
+                    
+            if len(market_data) < self.sequence_length + self.prediction_days:
+                st.error(f"Insufficient market data. Need at least {self.sequence_length + self.prediction_days} points")
+                return None, None
+                    
+            # Create copies of input data
+            market = market_data.copy()
+            news = news_data.copy()
+            
+            # Debug information
+            st.write("Market data shape:", market.shape)
+            st.write("News data shape:", news.shape)
+            
+            # Print actual columns for debugging
+            st.write("Market columns:", market.columns.tolist())
+            st.write("News columns:", news.columns.tolist())
+            
+            # Ensure datetime format
+            market['Date'] = pd.to_datetime(market['Date'])
+            news['Date'] = pd.to_datetime(news['Date'])
+            
+            # Create date-only columns for merging
+            market['DateOnly'] = market['Date'].dt.date
+            news['DateOnly'] = news['Date'].dt.date
+            
+            # Find sentiment column in news data
+            sentiment_col = None
+            for col in news.columns:
+                if 'sentiment' in col.lower() and 'score' in col.lower():
+                    sentiment_col = col
+                    st.write(f"Found sentiment column: {sentiment_col}")
+                    break
+                    
+            if sentiment_col is None:
+                st.error("Could not find sentiment score column in news data")
+                return None, None
+            
+            # Calculate daily sentiment and explicitly name it 'News_Sentiment'
+            daily_sentiment = news.groupby('DateOnly')[sentiment_col].mean().reset_index()
+            daily_sentiment.columns = ['DateOnly', 'News_Sentiment']
+            
+            # Debug information
+            st.write("Daily sentiment shape:", daily_sentiment.shape)
+            st.write("Daily sentiment columns:", daily_sentiment.columns.tolist())
+            
+            # Merge data
+            data = pd.merge(market, daily_sentiment, on='DateOnly', how='left')
+            
+            # Verify News_Sentiment exists
+            if 'News_Sentiment' not in data.columns:
+                st.error("News_Sentiment column not found after merge")
+                st.write("Available columns after merge:", data.columns.tolist())
+                # Fix it by creating it if needed
+                data['News_Sentiment'] = 0
+            
+            # Fill missing sentiment values
+            data['News_Sentiment'] = data['News_Sentiment'].fillna(0)
+            
+            # Debug information
+            st.write("Combined data shape:", data.shape)
+            st.write("Combined data columns:", data.columns.tolist())
+            
+            # Verify minimum required data points
+            if len(data) < self.sequence_length + self.prediction_days:
+                st.error(f"Insufficient data after merge. Need at least {self.sequence_length + self.prediction_days} points")
+                return None, None
+            
+            # Prepare features - ensure they exist
+            market_features = []
+            
+            # Basic required features
+            required_features = ['Open', 'High', 'Low', 'Close', 'Volume']
+            for feature in required_features:
+                if feature in data.columns:
+                    market_features.append(feature)
+                else:
+                    st.error(f"Required feature {feature} not found in data")
+                    return None, None
+                    
+            # Add News_Sentiment
+            features = market_features + ['News_Sentiment']
+            self.used_features = features
+            
+            st.write("Features used for prediction:", features)
+            
+            # Create sequences
+            X = []
+            y = []
+            
+            valid_range = len(data) - self.prediction_days
+            
+            for i in range(valid_range - self.sequence_length + 1):
+                try:
+                    sequence = []
+                    for j in range(self.sequence_length):
+                        # Extract values from the row for each feature
+                        feature_values = []
+                        for feature in features:
+                            feature_values.append(data.iloc[i + j][feature])
+                        sequence.extend(feature_values)
+                    
+                    target = data.iloc[i + self.sequence_length:i + self.sequence_length + self.prediction_days]['Close'].values
+                    
+                    if len(target) == self.prediction_days:
+                        X.append(sequence)
+                        y.append(target)
+                except Exception as e:
+                    st.warning(f"Error creating sequence at index {i}: {str(e)}")
+                    continue
+            
+            if not X:
                 st.error("No valid sequences could be created")
                 return None, None
             
-            progress_bar.progress(100)
-            return X, y
-            
-        except Exception as e:
-            self.logger.error(f"Error preparing market data: {str(e)}")
-            st.error(f"Error preparing market data: {str(e)}")
-            return None, None
-        finally:
-            if 'progress_bar' in locals():
-                progress_bar.empty()
-            if 'status_text' in locals():
-                status_text.empty()
-        """Prepare market data for Random Forest model."""
-        try:
-            # Create a progress bar
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            status_text.text("Preparing market data...")
-            
-            # Ensure we have the required columns
-            required_columns = ['Date', 'Close', 'Volume']
-            if not all(col in market_data.columns for col in required_columns):
-                raise ValueError(f"Missing required columns. Need: {required_columns}")
-            
-            data = market_data.copy()
-            
-            # Calculate technical indicators
-            status_text.text("Calculating technical indicators...")
-            progress_bar.progress(20)
-            
-            data['Returns'] = data['Close'].pct_change()
-            data['Volatility'] = data['Returns'].rolling(window=5).std()
-            data['MA5'] = data['Close'].rolling(window=5).mean()
-            data['MA20'] = data['Close'].rolling(window=20).mean()
-            
-            # Remove NaN values
-            data = data.dropna()
-            
-            if len(data) < self.sequence_length + self.prediction_days:
-                raise ValueError("Not enough data points after preprocessing")
-            
-            progress_bar.progress(40)
-            status_text.text("Creating feature sequences...")
-            
-            # Create sequences for features and targets
-            X = []
-            y = []
-            features = ['Close', 'Volume', 'Returns', 'Volatility', 'MA5', 'MA20']
-            
-            for i in range(len(data) - self.sequence_length - self.prediction_days):
-                sequence = data.iloc[i:(i + self.sequence_length)][features].values
-                target = data.iloc[i + self.sequence_length:i + self.sequence_length + self.prediction_days]['Close'].values
-                
-                if len(target) == self.prediction_days:  # Ensure we have enough target values
-                    X.append(sequence.flatten())  # Flatten the sequence
-                    y.append(target)
-            
-            progress_bar.progress(80)
-            status_text.text("Finalising data preparation...")
-            
-            # Convert to numpy arrays and reshape
             X = np.array(X)
             y = np.array(y)
             
-            if len(X) == 0 or len(y) == 0:
-                raise ValueError("No valid sequences could be created from the data")
+            # Normalize features
+            X = self.scaler.fit_transform(X)
             
-            progress_bar.progress(100)
-            status_text.text("Data preparation complete!")
-            
+            st.success(f"Successfully prepared {len(X)} training samples")
             return X, y
             
         except Exception as e:
-            self.logger.error(f"Error preparing market data: {str(e)}")
-            status_text.text(f"Error: {str(e)}")
+            st.error(f"Error in prepare_sentiment_enhanced_data: {str(e)}")
+            st.exception(e)
             return None, None
-        finally:
-            progress_bar.empty()
-            status_text.empty()
 
-    def prepare_sentiment_enhanced_data(self, market_data, news_sentiment, social_sentiment=None):
-        """Prepare combined market and sentiment data."""
+    def train_market_model(self, market_data):
         try:
-            # Create a progress bar
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            status_text.text("Preparing combined market and sentiment data...")
-            
-            # Debug: Show initial shapes
-            st.write(f"Initial market data shape: {market_data.shape}")
-            st.write(f"Initial news sentiment shape: {news_sentiment.shape}")
-            
-            data = market_data.copy()
-            
-            # Calculate market features
-            data['Returns'] = data['Close'].pct_change()
-            data['Volatility'] = data['Returns'].rolling(window=3).std()
-            data['MA5'] = data['Close'].rolling(window=3).mean()
-            
-            # Add momentum indicators
-            data['price_momentum'] = data['Close'].pct_change(5)  # 5-day momentum
-            data['volume_momentum'] = data['Volume'].pct_change(5)
-            data['recent_trend'] = data['Close'].pct_change(3).rolling(window=3).mean()
-            
-            # Debug: Show after market features
-            st.write("Market features calculated")
-            
-            # Process and align sentiment data
-            status_text.text("Processing sentiment data...")
-            progress_bar.progress(40)
-            
-            # Ensure dates are in the correct format
-            data['Date'] = pd.to_datetime(data['Date']).dt.date
-            news_sentiment['Date'] = pd.to_datetime(news_sentiment['Date']).dt.date
-            
-            # Calculate daily sentiment averages
-            daily_sentiment = (news_sentiment.groupby('Date')['Sentiment Score']
-                             .mean()
-                             .reset_index())
-            
-            # Debug: Show daily sentiment
-            st.write("Daily sentiment calculated:")
-            st.write(daily_sentiment.head())
-            
-            # Merge market data with sentiment
-            data = pd.merge(data, 
-                          daily_sentiment,
-                          on='Date',
-                          how='left')
-            
-            # Debug: Show after merge
-            st.write(f"Shape after merging sentiment: {data.shape}")
-            
-            # Add social sentiment if available
-            if social_sentiment is not None:
-                social_sentiment['Date'] = pd.to_datetime(social_sentiment['Date']).dt.date
-                daily_social = (social_sentiment.groupby('Date')['Sentiment_Score']
-                              .mean()
-                              .reset_index())
-                
-                data = pd.merge(data, 
-                              daily_social,
-                              on='Date',
-                              how='left')
-            
-            # Fill any missing sentiment values with 0
-            data['Sentiment Score'] = data['Sentiment Score'].fillna(0)
-            if 'Sentiment_Score' in data.columns:
-                data['Sentiment_Score'] = data['Sentiment_Score'].fillna(0)
-            
-            # Remove any remaining NaN values
-            data = data.dropna()
-            
-            # Debug: Show data after cleaning
-            st.write(f"Final shape after cleaning: {data.shape}")
-            
-            # Create sequences
-            X = []
-            y = []
-            features = ['Close', 'Volume', 'Returns', 'Volatility', 'MA5', 
-                       'price_momentum', 'volume_momentum', 'recent_trend',
-                       'Sentiment Score']
-            if social_sentiment is not None:
-                features.append('Sentiment_Score')
-            
-            # Store the features used for prediction later
-            self.used_features = features.copy()
-            
-            # Debug: Show features
-            st.write(f"Using features: {features}")
-            
-            for i in range(len(data) - self.sequence_length - self.prediction_days + 1):
-                sequence = data.iloc[i:(i + self.sequence_length)][features].values
-                target = data.iloc[i + self.sequence_length:i + self.sequence_length + self.prediction_days]['Close'].values
-                
-                if len(target) == self.prediction_days:
-                    X.append(sequence.flatten())
-                    y.append(target)
-            
-            # Debug: Show sequence info
-            st.write(f"Number of sequences created: {len(X)}")
-            
-            if len(X) == 0:
-                raise ValueError("No valid sequences could be created")
-            
-            # Convert to numpy arrays
-            X = np.array(X)
-            y = np.array(y)
-            
-            progress_bar.progress(100)
-            status_text.text("Data preparation complete!")
-            
-            return X, y
-            
-        except Exception as e:
-            self.logger.error(f"Error preparing sentiment-enhanced data: {str(e)}")
-            st.error(f"Error preparing sentiment-enhanced data: {str(e)}")
-            return None, None
-        finally:
-            progress_bar.empty()
-            status_text.empty()
-        """Prepare combined market and sentiment data."""
-        try:
-            # Create a progress bar
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            status_text.text("Preparing combined market and sentiment data...")
-            
-            # Debug: Show initial shapes
-            st.write(f"Initial market data shape: {market_data.shape}")
-            st.write(f"Initial news sentiment shape: {news_sentiment.shape}")
-            
-            data = market_data.copy()
-            
-            # Calculate market features
-            data['Returns'] = data['Close'].pct_change()
-            data['Volatility'] = data['Returns'].rolling(window=3).std()
-            data['MA5'] = data['Close'].rolling(window=3).mean()
-            
-            # Debug: Show after market features
-            st.write("Market features calculated")
-            
-            # Process and align sentiment data
-            status_text.text("Processing sentiment data...")
-            progress_bar.progress(40)
-            
-            # Convert dates to datetime
-            data['Date'] = pd.to_datetime(data['Date'])
-            news_sentiment['Date'] = pd.to_datetime(news_sentiment['Date'])
-            
-            # Calculate daily sentiment averages
-            daily_sentiment = news_sentiment.groupby(news_sentiment['Date'].dt.date)['Sentiment Score'].mean().reset_index()
-            daily_sentiment['Date'] = pd.to_datetime(daily_sentiment['Date'])
-            
-            # Debug: Show daily sentiment
-            st.write("Daily sentiment calculated:")
-            st.write(daily_sentiment.head())
-            
-            # Merge market data with sentiment
-            data = pd.merge(data, 
-                          daily_sentiment, 
-                          left_on=data['Date'].dt.date,
-                          right_on='Date',
-                          how='left',
-                          suffixes=('', '_sentiment'))
-            
-            # Debug: Show after merge
-            st.write(f"Shape after merging sentiment: {data.shape}")
-            
-            if social_sentiment is not None:
-                social_sentiment['Date'] = pd.to_datetime(social_sentiment['Date'])
-                daily_social = social_sentiment.groupby(social_sentiment['Date'].dt.date)['Sentiment_Score'].mean().reset_index()
-                daily_social['Date'] = pd.to_datetime(daily_social['Date'])
-                
-                data = pd.merge(data, 
-                              daily_social,
-                              left_on=data['Date'].dt.date,
-                              right_on='Date',
-                              how='left',
-                              suffixes=('', '_social'))
-            
-            # Remove NaN values
-            data = data.dropna()
-            
-            # Debug: Show data after cleaning
-            st.write(f"Final shape after cleaning: {data.shape}")
-            
-            if len(data) < self.sequence_length + self.prediction_days:
-                raise ValueError(f"Not enough data points. Have {len(data)}, need {self.sequence_length + self.prediction_days}")
-            
-            # Create sequences
-            X = []
-            y = []
-            features = ['Close', 'Volume', 'Returns', 'Volatility', 'MA5', 'Sentiment Score']
-            if social_sentiment is not None:
-                features.append('Sentiment_Score')
-            
-            # Debug: Show features
-            st.write(f"Using features: {features}")
-            
-            for i in range(len(data) - self.sequence_length - self.prediction_days + 1):
-                sequence = data.iloc[i:(i + self.sequence_length)][features].values
-                target = data.iloc[i + self.sequence_length:i + self.sequence_length + self.prediction_days]['Close'].values
-                
-                if len(target) == self.prediction_days:
-                    X.append(sequence.flatten())
-                    y.append(target)
-            
-            # Debug: Show sequence info
-            st.write(f"Number of sequences created: {len(X)}")
-            
-            if len(X) == 0:
-                raise ValueError("No valid sequences could be created")
-            
-            # Convert to numpy arrays
-            X = np.array(X)
-            y = np.array(y)
-            
-            progress_bar.progress(100)
-            status_text.text("Data preparation complete!")
-            
-            return X, y
-            
-        except Exception as e:
-            self.logger.error(f"Error preparing sentiment-enhanced data: {str(e)}")
-            st.error(f"Error preparing sentiment-enhanced data: {str(e)}")
-            return None, None
-        finally:
-            progress_bar.empty()
-            status_text.empty()
-
-    def build_market_model(self):
-        """Build Random Forest model for pure market data predictions."""
-        self.market_model = RandomForestRegressor(
-            n_estimators=50,
-            max_depth=5,
-            min_samples_split=2,
-            min_samples_leaf=1,
-            random_state=42
-        )
-
-    def build_sentiment_model(self):
-        """Build Random Forest model for sentiment-enhanced predictions."""
-        self.sentiment_enhanced_model = RandomForestRegressor(
-            n_estimators=50,
-            max_depth=5,
-            min_samples_split=2,
-            min_samples_leaf=1,
-            random_state=42
-        )
-
-    def train_market_model(self, market_data, **kwargs):
-        """Train the pure market data prediction model."""
-        try:
+            st.write("Training market model...")
             X, y = self.prepare_market_data(market_data)
+            
             if X is None or y is None:
-                return None
+                return False
             
-            st.text("Training market model...")
-            progress_bar = st.progress(0)
+            self.market_model = RandomForestRegressor(
+                n_estimators=50,
+                max_depth=3,
+                min_samples_split=2,
+                random_state=42
+            )
             
-            self.build_market_model()
             self.market_model.fit(X, y)
-            
-            progress_bar.progress(100)
-            return {'status': 'success'}
+            st.success("Market model trained successfully!")
+            return True
             
         except Exception as e:
-            self.logger.error(f"Error training market model: {str(e)}")
             st.error(f"Error training market model: {str(e)}")
-            return None
-        finally:
-            if 'progress_bar' in locals():
-                progress_bar.empty()
+            return False
 
-    def train_sentiment_model(self, market_data, news_sentiment, social_sentiment=None, **kwargs):
-        """Train the sentiment-enhanced prediction model."""
+    def train_sentiment_model(self, market_data, news_data):
+        """Train sentiment-enhanced model with minimal approach"""
         try:
-            X, y = self.prepare_sentiment_enhanced_data(market_data, news_sentiment, social_sentiment)
-            if X is None or y is None:
-                return None
+            st.write("Training sentiment-enhanced model...")
             
-            st.text("Training sentiment-enhanced model...")
-            progress_bar = st.progress(0)
+            # Validate input data
+            if market_data is None or news_data is None:
+                st.error("Missing input data")
+                return False
+                    
+            # Show data info
+            st.write("Market data shape:", market_data.shape)
+            st.write("News data shape:", news_data.shape)
             
-            self.build_sentiment_model()
+            # Create copies to avoid modifying originals
+            market_copy = market_data.copy()
+            news_copy = news_data.copy()
+            
+            # Find sentiment column in news data
+            sentiment_col = None
+            for col in news_copy.columns:
+                if 'sentiment' in col.lower() and 'score' in col.lower():
+                    sentiment_col = col
+                    st.write(f"Found sentiment column: {sentiment_col}")
+                    break
+            
+            # Handle case where sentiment column is not found
+            if sentiment_col is None:
+                st.warning("Sentiment column not found. Using default values.")
+                sentiment_col = 'Sentiment Score'
+                news_copy[sentiment_col] = 0
+                    
+            # Ensure datetime format
+            market_copy['Date'] = pd.to_datetime(market_copy['Date'])
+            news_copy['Date'] = pd.to_datetime(news_copy['Date'])
+            
+            # Create date-only columns for merging
+            market_copy['DateOnly'] = market_copy['Date'].dt.date
+            news_copy['DateOnly'] = news_copy['Date'].dt.date
+            
+            # Calculate daily sentiment with explicit naming
+            daily_sentiment = news_copy.groupby('DateOnly')[sentiment_col].mean().reset_index()
+            daily_sentiment.rename(columns={sentiment_col: 'News_Sentiment'}, inplace=True)
+            
+            # Merge data
+            combined = pd.merge(market_copy, daily_sentiment, on='DateOnly', how='left')
+            
+            # Check if News_Sentiment exists after merge
+            if 'News_Sentiment' not in combined.columns:
+                st.warning("News_Sentiment column not found after merge. Creating it manually.")
+                combined['News_Sentiment'] = 0
+            else:
+                # Fill missing values
+                combined['News_Sentiment'].fillna(0, inplace=True)
+            
+            # Prepare features - use core features and News_Sentiment
+            features = ['Open', 'High', 'Low', 'Close', 'Volume', 'News_Sentiment']
+            self.used_features = features
+            
+            st.write("Features used for prediction:", features)
+            
+            # Create sequences
+            X = []
+            y = []
+            
+            # Set sequence length and prediction days
+            if not hasattr(self, 'sequence_length') or self.sequence_length < 1:
+                self.sequence_length = 3
+            if not hasattr(self, 'prediction_days') or self.prediction_days < 1:
+                self.prediction_days = 2
+                
+            valid_range = len(combined) - self.prediction_days
+            
+            for i in range(valid_range - self.sequence_length + 1):
+                try:
+                    sequence = []
+                    for j in range(self.sequence_length):
+                        row_features = []
+                        for feature in features:
+                            if feature in combined.columns:
+                                row_features.append(combined.iloc[i + j][feature])
+                            else:
+                                # Use 0 as default if feature is missing
+                                row_features.append(0)
+                        sequence.extend(row_features)
+                    
+                    target = combined.iloc[i + self.sequence_length:i + self.sequence_length + self.prediction_days]['Close'].values
+                    
+                    if len(target) == self.prediction_days:
+                        X.append(sequence)
+                        y.append(target)
+                except Exception as e:
+                    st.warning(f"Error processing sequence at index {i}: {str(e)}")
+                    continue
+            
+            if not X:
+                st.error("No valid sequences could be created")
+                return False
+            
+            X = np.array(X)
+            y = np.array(y)
+            
+            # Normalize features
+            X = self.scaler.fit_transform(X)
+            
+            # Train model
+            self.sentiment_enhanced_model = RandomForestRegressor(
+                n_estimators=50,
+                max_depth=5,
+                min_samples_split=2,
+                random_state=42
+            )
+            
             self.sentiment_enhanced_model.fit(X, y)
-            
-            progress_bar.progress(100)
-            return {'status': 'success'}
+            st.success("Sentiment model trained successfully!")
+            return True
             
         except Exception as e:
-            self.logger.error(f"Error training sentiment model: {str(e)}")
             st.error(f"Error training sentiment model: {str(e)}")
-            return None
-        finally:
-            if 'progress_bar' in locals():
-                progress_bar.empty()
+            st.exception(e)
+            return False
 
     def predict_market(self, market_data):
-        """Make predictions using pure market data."""
         try:
             if self.market_model is None:
                 raise ValueError("Market model has not been trained")
             
-            # Prepare recent data
             data = market_data.copy()
             
-            # Calculate all technical indicators
-            data['Returns'] = data['Close'].pct_change()
-            data['Volatility'] = data['Returns'].rolling(window=3).std()
-            data['MA5'] = data['Close'].rolling(window=3).mean()
-            data['price_momentum'] = data['Close'].pct_change(5)
-            data['volume_momentum'] = data['Volume'].pct_change(5)
-            data['recent_trend'] = data['Close'].pct_change(3).rolling(window=3).mean()
+            # Check data length
+            if len(data) < self.sequence_length:
+                raise ValueError(f"Not enough data points. Need at least {self.sequence_length}")
             
-            # Remove NaN values
-            data = data.dropna()
+            # Verify features
+            missing_features = [f for f in self.market_features if f not in data.columns]
+            if missing_features:
+                raise ValueError(f"Missing features: {missing_features}")
             
-            # Get most recent sequence
-            features = ['Close', 'Volume', 'Returns', 'Volatility', 'MA5', 
-                    'price_momentum', 'volume_momentum', 'recent_trend']
+            # Create sequence from last available data points
+            sequence = []
+            start_idx = len(data) - self.sequence_length
             
-            recent_data = data.iloc[-self.sequence_length:][features]
-            features = recent_data.values.flatten().reshape(1, -1)
+            for i in range(self.sequence_length):
+                row = data.iloc[start_idx + i][self.market_features].values
+                sequence.extend(row)
+            
+            features = np.array(sequence).reshape(1, -1)
+            features = self.scaler.transform(features)
             
             return self.market_model.predict(features)[0]
             
         except Exception as e:
-            self.logger.error(f"Error making market prediction: {str(e)}")
-            st.error(f"Error making market prediction: {str(e)}")
+            st.error(f"Error in predict_market: {str(e)}")
             return None
 
-    def predict_with_sentiment(self, market_data, news_sentiment, social_sentiment=None):
-        """Make predictions using market data and sentiment."""
+    def predict_with_sentiment(self, market_data, news_data):
+        """Predict with sentiment model using minimal approach"""
         try:
             if self.sentiment_enhanced_model is None:
                 raise ValueError("Sentiment-enhanced model has not been trained")
             
-            # Prepare recent data
-            data = market_data.copy()
+            # Create copies to avoid modifying originals
+            market_copy = market_data.copy()
+            news_copy = news_data.copy()
             
-            # Calculate market features
-            data['Returns'] = data['Close'].pct_change()
-            data['Volatility'] = data['Returns'].rolling(window=3).std()
-            data['MA5'] = data['Close'].rolling(window=3).mean()
-            data['price_momentum'] = data['Close'].pct_change(5)
-            data['volume_momentum'] = data['Volume'].pct_change(5)
-            data['recent_trend'] = data['Close'].pct_change(3).rolling(window=3).mean()
+            # Find sentiment column in news data
+            sentiment_col = None
+            for col in news_copy.columns:
+                if 'sentiment' in col.lower() and 'score' in col.lower():
+                    sentiment_col = col
+                    break
             
-            # Prepare sentiment data
-            data['Date'] = pd.to_datetime(data['Date']).dt.date
-            news_sentiment['Date'] = pd.to_datetime(news_sentiment['Date']).dt.date
+            # Handle case where sentiment column is not found
+            if sentiment_col is None:
+                sentiment_col = 'Sentiment Score'
+                news_copy[sentiment_col] = 0
             
-            # Calculate daily sentiment
-            daily_sentiment = (news_sentiment.groupby('Date')['Sentiment Score']
-                            .mean()
-                            .reset_index())
+            # Ensure datetime format
+            market_copy['Date'] = pd.to_datetime(market_copy['Date'])
+            news_copy['Date'] = pd.to_datetime(news_copy['Date'])
             
-            # Merge sentiment data
-            data = pd.merge(data, daily_sentiment, on='Date', how='left')
-            data['Sentiment Score'] = data['Sentiment Score'].fillna(0)
+            # Create date-only columns for merging
+            market_copy['DateOnly'] = market_copy['Date'].dt.date
+            news_copy['DateOnly'] = news_copy['Date'].dt.date
             
-            # Add social sentiment if available
-            if social_sentiment is not None:
-                social_sentiment['Date'] = pd.to_datetime(social_sentiment['Date']).dt.date
-                daily_social = (social_sentiment.groupby('Date')['Sentiment_Score']
-                            .mean()
-                            .reset_index())
-                data = pd.merge(data, daily_social, on='Date', how='left')
-                data['Sentiment_Score'] = data['Sentiment_Score'].fillna(0)
+            # Calculate daily sentiment with explicit naming
+            daily_sentiment = news_copy.groupby('DateOnly')[sentiment_col].mean().reset_index()
+            daily_sentiment.rename(columns={sentiment_col: 'News_Sentiment'}, inplace=True)
             
-            # Remove NaN values
-            data = data.dropna()
+            # Merge data
+            combined = pd.merge(market_copy, daily_sentiment, on='DateOnly', how='left')
             
-            if self.used_features is None:
-                features = ['Close', 'Volume', 'Returns', 'Volatility', 'MA5', 
-                        'price_momentum', 'volume_momentum', 'recent_trend',
-                        'Sentiment Score']
-                if social_sentiment is not None:
-                    features.append('Sentiment_Score')
+            # Check if News_Sentiment exists after merge
+            if 'News_Sentiment' not in combined.columns:
+                combined['News_Sentiment'] = 0
             else:
-                features = self.used_features
+                # Fill missing values
+                combined['News_Sentiment'].fillna(0, inplace=True)
             
-            # Get the most recent sequence
-            recent_data = data.iloc[-self.sequence_length:][features]
-            features_array = recent_data.values.flatten().reshape(1, -1)
+            # Get features - use the same as in training
+            features = self.used_features
+            if not features:
+                features = ['Open', 'High', 'Low', 'Close', 'Volume', 'News_Sentiment']
             
-            return self.sentiment_enhanced_model.predict(features_array)[0]
+            # Create sequence
+            sequence = []
+            start_idx = len(combined) - self.sequence_length
+            
+            for i in range(self.sequence_length):
+                row_features = []
+                for feature in features:
+                    if feature in combined.columns:
+                        row_features.append(combined.iloc[start_idx + i][feature])
+                    else:
+                        # Use 0 as default if feature is missing
+                        row_features.append(0)
+                sequence.extend(row_features)
+            
+            features = np.array(sequence).reshape(1, -1)
+            features = self.scaler.transform(features)
+            
+            return self.sentiment_enhanced_model.predict(features)[0]
             
         except Exception as e:
-            self.logger.error(f"Error making sentiment-enhanced prediction: {str(e)}")
-            st.error(f"Error making sentiment-enhanced prediction: {str(e)}")
+            st.error(f"Error in predict_with_sentiment: {str(e)}")
+            st.exception(e)
             return None
-    
+
     def evaluate_predictions(self, actual_prices, market_predictions, sentiment_predictions):
         """Evaluate and compare both types of predictions."""
         try:
@@ -586,7 +481,8 @@ class MarketPredictionAnalyser:
             market_mape = np.mean(np.abs((actual_prices - market_predictions) / actual_prices)) * 100
             sentiment_mape = np.mean(np.abs((actual_prices - sentiment_predictions) / actual_prices)) * 100
             
-            return {
+            # Create results dictionary
+            results = {
                 'market_model': {
                     'mse': market_mse,
                     'mae': market_mae,
@@ -607,7 +503,12 @@ class MarketPredictionAnalyser:
                 }
             }
             
+            # Print evaluation metrics
+            st.write("Evaluation Results:")
+            st.write(results)
+            
+            return results
+            
         except Exception as e:
-            self.logger.error(f"Error evaluating predictions: {str(e)}")
             st.error(f"Error evaluating predictions: {str(e)}")
             return None

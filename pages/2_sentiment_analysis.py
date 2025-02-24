@@ -5,6 +5,7 @@ from utils.api_helpers import fetch_news_data
 from analysers.sentiment_analyser import FinancialSentimentAnalyser
 from analysers.reddit_analyser import RedditAnalyser
 from analysers.x_analyser import XAnalyser
+from datetime import datetime, timedelta
 
 
 def plot_daily_sentiment(news_df):
@@ -246,13 +247,13 @@ def x_analysis_tab():
     if st.button("Fetch X Data"):
         with st.spinner("Fetching X data..."):
             try:
-                # Get market data date range
-                start_date = st.session_state.market_data['Date'].min()
-                end_date = st.session_state.market_data['Date'].max()
+                # Get market data date range and ensure timezone-naive
+                start_date = pd.to_datetime(st.session_state.market_data['Date'].min()).tz_localize(None)
+                end_date = pd.to_datetime(st.session_state.market_data['Date'].max()).tz_localize(None)
                 
                 st.info(f"Fetching tweets for market data period: {start_date.date()} to {end_date.date()}")
                 
-                # Initialise X analyser
+                # Initialize X analyser
                 x_analyser = XAnalyser()
                 
                 # Fetch X data
@@ -267,41 +268,54 @@ def x_analysis_tab():
                     analysed_data = x_analyser.analyse_content(twitter_data, sentiment_analyser)
                     
                     if not analysed_data.empty:
+                        # Save hourly aggregated data for visualization
                         st.session_state.twitter_data = analysed_data
+                        
+                        # Make raw tweet data available for correlation analysis (if created by analyse_content)
+                        if 'twitter_raw_data' in st.session_state and not st.session_state.twitter_raw_data.empty:
+                            st.success("✅ Raw tweet data also saved for correlation analysis")
+                        
+                        st.write("Twitter Data Summary:")
+                        st.write("- Shape:", analysed_data.shape)
+                        st.write("- Date range:", analysed_data['Date'].min(), "to", analysed_data['Date'].max())
                         
                         # Display X sentiment analysis
                         st.subheader("X Sentiment Analysis")
+                        
+                        # Calculate sentiment metrics
+                        avg_sentiment = analysed_data['Sentiment_Score'].mean()
+                        total_tweets = analysed_data['Tweet_Count'].sum()
                         
                         # Show summary metrics
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric(
                                 "Average Sentiment",
-                                f"{analysed_data['Sentiment_Score'].mean():.2f}"
+                                f"{avg_sentiment:.2f}"
                             )
                             st.metric(
                                 "Total Tweets",
-                                len(analysed_data)
+                                total_tweets
                             )
                         
                         with col2:
                             st.metric(
-                                "Positive Tweets",
-                                len(analysed_data[analysed_data['Sentiment'] == 'Positive'])
+                                "Average Daily Tweets",
+                                f"{total_tweets / len(analysed_data):.1f}"
                             )
                             st.metric(
-                                "Total Engagement",
-                                analysed_data['Engagement_Score'].sum()
+                                "Days Analyzed",
+                                len(analysed_data)
                             )
                         
                         with col3:
                             st.metric(
-                                "Negative Tweets",
-                                len(analysed_data[analysed_data['Sentiment'] == 'Negative'])
+                                "Average Engagement",
+                                f"{analysed_data['Engagement_Mean'].mean():.1f}"
                             )
                             st.metric(
-                                "Verified Authors",
-                                analysed_data['Author_Verified'].sum()
+                                "Total Engagement",
+                                int(analysed_data['Engagement_Total'].sum())
                             )
                         
                         # Display sentiment trend
@@ -318,7 +332,7 @@ def x_analysis_tab():
                         with eng_col1:
                             # Calculate correlation between sentiment and engagement
                             engagement_corr = analysed_data['Sentiment_Score'].corr(
-                                analysed_data['Engagement_Score']
+                                analysed_data['Engagement_Mean']
                             )
                             st.metric(
                                 "Sentiment-Engagement Correlation",
@@ -326,50 +340,39 @@ def x_analysis_tab():
                             )
                         
                         with eng_col2:
-                            # Calculate average engagement by sentiment
-                            avg_engagement = analysed_data.groupby('Sentiment')['Engagement_Score'].mean()
-                            st.write("Average Engagement by Sentiment:")
-                            st.write(avg_engagement)
+                            # Daily statistics
+                            st.write("Daily Statistics:")
+                            daily_stats = analysed_data[[
+                                'Sentiment_Score',
+                                'Engagement_Mean',
+                                'Tweet_Count'
+                            ]].describe()
+                            st.dataframe(daily_stats)
                         
-                        # Display top influencers
-                        st.subheader("Top Influencers")
-                        top_authors = (
-                            analysed_data.groupby('Author')
-                            .agg({
-                                'Author_Followers': 'first',
-                                'Author_Verified': 'first',
-                                'Engagement_Score': 'sum',
-                                'Text': 'count'
-                            })
-                            .sort_values('Engagement_Score', ascending=False)
-                            .head(10)
-                        )
+                        # Display the daily aggregated data
+                        st.subheader("Daily Twitter Activity")
+                        display_df = analysed_data.copy()
+                        display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d')
+                        
+                        # Select and reorder columns for display
+                        display_columns = [
+                            'Date',
+                            'Tweet_Count',
+                            'Sentiment_Score',
+                            'Sentiment_Std',
+                            'Engagement_Mean',
+                            'Engagement_Total'
+                        ]
                         
                         st.dataframe(
-                            top_authors.rename(columns={
-                                'Text': 'Tweet Count',
-                                'Engagement_Score': 'Total Engagement'
-                            }),
-                            use_container_width=True
-                        )
-                        
-                        # Display the tweet data table
-                        st.subheader("Tweets")
-                        display_df = analysed_data[[
-                            'Date', 'Author', 'Text', 'Sentiment', 
-                            'Sentiment_Score', 'Engagement_Score',
-                            'Author_Verified', 'URL'
-                        ]].copy()
-                        display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-                        st.dataframe(
-                            display_df.sort_values('Date', ascending=False),
+                            display_df[display_columns].sort_values('Date', ascending=False),
                             use_container_width=True
                         )
                         
                         # Add download button
                         st.download_button(
                             "Download X Analysis Data",
-                            analysed_data.to_csv(index=False),
+                            display_df.to_csv(index=False),
                             "x_analysis.csv",
                             "text/csv",
                             key='download-x-data'
@@ -381,7 +384,7 @@ def x_analysis_tab():
                     
             except Exception as e:
                 st.error(f"Error in X analysis: {str(e)}")
-                st.exception(e)  # Show the full traceback
+                st.exception(e)
 
 def reddit_analysis_tab():
     st.header("Reddit Analysis")

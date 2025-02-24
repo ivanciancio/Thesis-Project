@@ -6,38 +6,59 @@ import streamlit as st
 
 class SentimentTrendAnalyser:
     def analyse_trends(self, data_series):
-        """
-        Analyse sentiment trends over time
-        
-        Args:
-            data_series (pd.Series): Time series data to analyse
-        """
+        """Analyse sentiment trends over time with improved confidence calculation"""
         try:
             if data_series is None or len(data_series) < 2:
                 return None
 
-            # Convert to numpy array for analysis
-            values = np.array(data_series)
+            # Convert to numpy array and remove any NaN values
+            values = pd.Series(data_series).dropna().values
             dates_numeric = np.array(range(len(values))).reshape(-1, 1)
             
-            # Calculate basic statistics
-            basic_stats = self.calculate_basic_stats(values)
+            # Fit linear regression for trend
+            model = LinearRegression()
+            model.fit(dates_numeric, values)
             
             # Calculate trend metrics
-            trend_metrics = self.calculate_trend_metrics(dates_numeric, values)
+            slope = model.coef_[0]
+            trend_direction = 'Improving' if slope > 0 else 'Declining' if slope < 0 else 'Stable'
             
-            # Calculate volatility metrics
-            volatility_metrics = self.calculate_volatility_metrics(values)
+            # Calculate R-squared (trend confidence)
+            r_squared = model.score(dates_numeric, values)
+            trend_confidence = r_squared * 100  # Convert to percentage
             
-            # Combine all metrics
-            return {
-                **basic_stats,
-                **trend_metrics,
-                **volatility_metrics
+            # Calculate volatility (standard deviation)
+            volatility = float(np.std(values))
+            
+            # Calculate moving averages
+            series = pd.Series(values)
+            ma5 = float(series.rolling(window=min(5, len(values))).mean().iloc[-1])
+            ma20 = float(series.rolling(window=min(20, len(values))).mean().iloc[-1])
+            
+            # Calculate momentum
+            momentum = float(np.mean(np.diff(values))) if len(values) > 1 else 0.0
+            
+            # Detect outliers using z-score
+            z_scores = np.abs((values - np.mean(values)) / np.std(values))
+            outliers = sum(z_scores > 2)
+            
+            # Create trend result dictionary
+            trend_analysis = {
+                'trend_direction': trend_direction,
+                'trend_strength': float(abs(slope)),
+                'trend_confidence': float(f"{trend_confidence:.1f}"),
+                'volatility': float(f"{volatility:.3f}"),
+                'momentum': float(f"{momentum:.3f}"),
+                'moving_average_5': float(f"{ma5:.2f}"),
+                'moving_average_20': float(f"{ma20:.2f}"),
+                'has_outliers': outliers > 0,
+                'outlier_count': int(outliers)
             }
             
+            return trend_analysis
+            
         except Exception as e:
-            st.error(f"Error in trend analysis: {e}")
+            st.error(f"Error in trend analysis: {str(e)}")
             return None
 
     def calculate_basic_stats(self, values):
@@ -96,8 +117,10 @@ class SentimentTrendAnalyser:
             
             # Calculate moving averages
             series = pd.Series(values)
-            ma5 = series.rolling(window=min(5, len(values))).mean().iloc[-1]
-            ma20 = series.rolling(window=min(20, len(values))).mean().iloc[-1]
+            window5 = min(5, len(values))
+            window20 = min(20, len(values))
+            ma5 = series.rolling(window=window5).mean().iloc[-1]
+            ma20 = series.rolling(window=window20).mean().iloc[-1]
             
             return {
                 'volatility': volatility,
@@ -107,7 +130,7 @@ class SentimentTrendAnalyser:
                 'moving_average_20': ma20
             }
         except Exception as e:
-            st.error(f"Error calculating volatility metrics: {e}")
+            st.error(f"Error calculating volatility metrics: {str(e)}")
             return {
                 'volatility': 0,
                 'outlier_count': 0,
@@ -139,15 +162,8 @@ class SentimentTrendAnalyser:
             
         summary_parts.append(f"The data is {volatility_desc}")
         
-        # Momentum
-        if abs(trend_analysis['momentum']) > 0.1:
-            momentum_desc = "rapidly" if abs(trend_analysis['momentum']) > 0.2 else "gradually"
-            direction = "improving" if trend_analysis['momentum'] > 0 else "declining"
-            summary_parts.append(f"The trend is {momentum_desc} {direction}")
-        
         # Moving averages comparison
-        if (trend_analysis['moving_average_5'] is not None and 
-            trend_analysis['moving_average_20'] is not None):
+        if trend_analysis['moving_average_5'] is not None and trend_analysis['moving_average_20'] is not None:
             ma_diff = trend_analysis['moving_average_5'] - trend_analysis['moving_average_20']
             if abs(ma_diff) > 0.1:
                 ma_desc = "diverging from" if ma_diff > 0 else "converging with"
@@ -159,37 +175,88 @@ class SentimentTrendAnalyser:
         
         return " | ".join(summary_parts)
 
-    def get_trend_recommendations(self, market_trend, sentiment_trend):
+    def get_trend_recommendations(self, market_trend, sentiment_trends):
         """Generate recommendations based on trend analysis"""
-        recommendations = []
+        try:
+            if market_trend is None:
+                return ["No market trend data available"]
+
+            recommendations = []
+
+            # Market trend recommendations
+            if market_trend.get('trend_confidence', 0) > 40:
+                if market_trend['trend_direction'] == 'Improving':
+                    recommendations.append("Strong positive market trend detected")
+                elif market_trend['trend_direction'] == 'Declining':
+                    recommendations.append("Strong negative market trend detected")
+
+            # Process each sentiment source
+            for source, trend in sentiment_trends.items():
+                if trend is None:
+                    continue
+                    
+                # Trend strength recommendations
+                if trend.get('trend_confidence', 0) > 40:
+                    if trend['trend_direction'] == 'Improving':
+                        recommendations.append(f"{source.title()} sentiment shows strong improvement")
+                    elif trend['trend_direction'] == 'Declining':
+                        recommendations.append(f"{source.title()} sentiment shows significant decline")
+
+                # Trend alignment
+                if trend['trend_direction'] == market_trend['trend_direction']:
+                    recommendations.append(f"{source.title()} sentiment aligns with market trend")
+                else:
+                    recommendations.append(f"{source.title()} sentiment diverges from market trend")
+
+                # Volatility checks
+                if trend.get('volatility', 0) > 0.5:
+                    recommendations.append(f"High {source.lower()} sentiment volatility detected")
+
+            if not recommendations:
+                recommendations.append("No significant trends detected")
+
+            return recommendations
+
+        except Exception as e:
+            st.error(f"Error generating trend recommendations: {str(e)}")
+            return ["Unable to generate recommendations due to an error"]
         
-        if not market_trend or not sentiment_trend:
-            return ["Insufficient data for trend recommendations"]
+def display_trend_analysis(trend_data):
+    """Display trend analysis results"""
+    if trend_data is None:
+        st.warning("No trend analysis results available")
+        return
 
-        # Market trend recommendations
-        if market_trend['trend_confidence'] > 70:
-            if market_trend['trend_direction'] == 'Improving':
-                recommendations.append("Strong positive market trend detected")
-            elif market_trend['trend_direction'] == 'Declining':
-                recommendations.append("Strong negative market trend detected")
-
-        # Sentiment trend recommendations
-        if sentiment_trend['trend_confidence'] > 70:
-            if sentiment_trend['trend_direction'] == 'Improving':
-                recommendations.append("Sentiment is showing strong improvement")
-            elif sentiment_trend['trend_direction'] == 'Declining':
-                recommendations.append("Sentiment is showing significant decline")
-
-        # Trend alignment
-        if market_trend['trend_direction'] == sentiment_trend['trend_direction']:
-            recommendations.append("Market and sentiment trends are aligned")
-        else:
-            recommendations.append("Market and sentiment trends show divergence")
-
-        # Volatility recommendations
-        if market_trend['volatility'] > 0.5:
-            recommendations.append("High market volatility detected")
-        if sentiment_trend['volatility'] > 0.5:
-            recommendations.append("High sentiment volatility detected")
-
-        return recommendations
+    try:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "Trend Direction",
+                trend_data['trend_direction'],
+                delta=f"{trend_data['trend_strength']:.3f}"
+            )
+        
+        with col2:
+            st.metric(
+                "Trend Confidence",
+                f"{trend_data['trend_confidence']:.1f}%"
+            )
+        
+        with col3:
+            st.metric(
+                "Volatility",
+                f"{trend_data['volatility']:.3f}"
+            )
+        
+        # Moving Averages
+        st.subheader("Moving Averages")
+        st.write(f"Short-term MA (5): {trend_data['moving_average_5']:.2f}")
+        st.write(f"Long-term MA (20): {trend_data['moving_average_20']:.2f}")
+        
+        # Outlier warning if needed
+        if trend_data['has_outliers']:
+            st.warning(f"Found {trend_data['outlier_count']} significant outliers in the data")
+            
+    except Exception as e:
+        st.error(f"Error displaying trend analysis: {str(e)}")

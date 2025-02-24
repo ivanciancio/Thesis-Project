@@ -57,8 +57,8 @@ def display_recommendations(recommendations):
     for i, rec in enumerate(recommendations, 1):
         st.write(f"{i}. {rec}")
 
-def create_trend_visualisation(market_data, sentiment_data):
-    """Create improved price vs sentiment visualisation"""
+def create_trend_visualisation(market_data, news_sentiment, reddit_sentiment=None, twitter_sentiment=None):
+    """Create improved price vs sentiment visualisation with Twitter data"""
     fig = go.Figure()
     
     # Add price line
@@ -72,23 +72,39 @@ def create_trend_visualisation(market_data, sentiment_data):
         )
     )
     
-    # Add sentiment line
-    if not sentiment_data.empty:
-        # Calculate daily sentiment
-        daily_sentiment = (sentiment_data
-            .groupby(sentiment_data['Date'].dt.date)
-            .agg({
-                'Sentiment Score': 'mean'
-            })
-            .reset_index())
-        daily_sentiment['Date'] = pd.to_datetime(daily_sentiment['Date'])
-        
+    # Add sentiment lines for each source
+    if not news_sentiment.empty:
+        daily_news = news_sentiment.groupby(news_sentiment['Date'].dt.date)['Sentiment Score'].mean()
         fig.add_trace(
             go.Scatter(
-                x=daily_sentiment['Date'],
-                y=daily_sentiment['Sentiment Score'],
-                name='Sentiment',
+                x=daily_news.index,
+                y=daily_news.values,
+                name='News Sentiment',
                 line=dict(color='red', width=2),
+                yaxis='y2'
+            )
+        )
+    
+    if reddit_sentiment is not None and not reddit_sentiment.empty:
+        daily_reddit = reddit_sentiment.groupby(reddit_sentiment['Date'].dt.date)['Sentiment_Score'].mean()
+        fig.add_trace(
+            go.Scatter(
+                x=daily_reddit.index,
+                y=daily_reddit.values,
+                name='Reddit Sentiment',
+                line=dict(color='orange', width=2),
+                yaxis='y2'
+            )
+        )
+    
+    if twitter_sentiment is not None and not twitter_sentiment.empty:
+        daily_twitter = twitter_sentiment.groupby(twitter_sentiment['Date'].dt.date)['Sentiment_Score'].mean()
+        fig.add_trace(
+            go.Scatter(
+                x=daily_twitter.index,
+                y=daily_twitter.values,
+                name='Twitter Sentiment',
+                line=dict(color='purple', width=2),
                 yaxis='y2'
             )
         )
@@ -96,139 +112,88 @@ def create_trend_visualisation(market_data, sentiment_data):
     # Update layout
     fig.update_layout(
         title='Price vs Sentiment Trends',
-        xaxis=dict(
-            title=dict(  # Changed here
-                text='Date',  # Changed here
-            ),
-            gridcolor='rgba(128,128,128,0.2)',
-            gridwidth=1,
-            showgrid=True
-        ),
+        xaxis=dict(title='Date'),
         yaxis=dict(
-            title=dict(  # Changed here
-                text='Price ($)',  # Changed here
-                font=dict(color='blue')  # Changed here - titlefont becomes font under title
-            ),
-            tickfont=dict(color='blue'),
-            gridcolor='rgba(128,128,128,0.2)',
-            gridwidth=1,
-            showgrid=True
+            title='Price ($)',
+            titlefont=dict(color='blue'),
+            tickfont=dict(color='blue')
         ),
         yaxis2=dict(
-            title=dict(  # Changed here
-                text='Sentiment Score',  # Changed here
-                font=dict(color='red')  # Changed here - titlefont becomes font under title
-            ),
+            title='Sentiment Score',
+            titlefont=dict(color='red'),
             tickfont=dict(color='red'),
             overlaying='y',
             side='right',
-            range=[-1, 1],  # Fix sentiment range
-            showgrid=False
+            range=[-1, 1]
         ),
         height=600,
         showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01,
-            bgcolor='rgba(255,255,255,0.8)'
-        ),
-        plot_bgcolor='black',
-        paper_bgcolor='black',
-        font=dict(color='white'),
         hovermode='x unified'
     )
-    
-    # Add range slider
-    fig.update_xaxes(rangeslider_visible=True)
     
     return fig
 
 def trend_interpretation_page():
     st.title("📊 Trend Interpretation")
     
-    # Check if required data exists in session state
-    if 'market_data' not in st.session_state or st.session_state.market_data is None:
-        st.warning("⚠️ Please fetch market data first in the Market Data page")
-        st.info("➡️ Go to the Main page and fetch market data for your analysis")
-        return
-        
-    if 'news_data' not in st.session_state or st.session_state.news_data is None:
-        st.warning("⚠️ Please complete sentiment analysis first")
-        st.info("➡️ Go to the Sentiment Analysis page and fetch news data")
+    # Check if required data exists
+    if not all(key in st.session_state for key in ['market_data', 'news_data']):
+        st.warning("⚠️ Please complete market and sentiment analysis first")
         return
     
     try:
         trend_analyser = SentimentTrendAnalyser()
         
-        # Safely get market data and check for required columns
-        market_data = st.session_state.market_data
-        if market_data is None or market_data.empty or 'Close' not in market_data.columns:
-            st.error("❌ Invalid or missing market data. Please ensure market data is properly loaded.")
-            return
-            
-        # Safely get sentiment data
-        news_data = st.session_state.news_data
-        if news_data is None or news_data.empty or 'Sentiment Score' not in news_data.columns:
-            st.error("❌ Invalid or missing sentiment data. Please ensure sentiment analysis is completed.")
-            return
+        # Analyze market trends
+        market_trend = trend_analyser.analyse_trends(st.session_state.market_data['Close'])
         
-        # Analyse market trends
-        market_trend = trend_analyser.analyse_trends(market_data['Close'])
-        if market_trend is None:
-            st.error("❌ Unable to analyze market trends with the available data")
-            return
-            
-        # Analyse sentiment trends
-        sentiment_trend = trend_analyser.analyse_trends(news_data['Sentiment Score'])
-        if sentiment_trend is None:
-            st.error("❌ Unable to analyze sentiment trends with the available data")
-            return
+        # Analyze sentiment trends for each source
+        sentiment_trends = {}
+        if st.session_state.news_data is not None:
+            sentiment_trends['news'] = trend_analyser.analyse_trends(
+                st.session_state.news_data['Sentiment Score']
+            )
         
-        # Display trend analysis
+        if 'reddit_data' in st.session_state and st.session_state.reddit_data is not None:
+            sentiment_trends['reddit'] = trend_analyser.analyse_trends(
+                st.session_state.reddit_data['Sentiment_Score']
+            )
+            
+        if 'twitter_data' in st.session_state and st.session_state.twitter_data is not None:
+            sentiment_trends['twitter'] = trend_analyser.analyse_trends(
+                st.session_state.twitter_data['Sentiment_Score']
+            )
+        
+        # Display trend analysis for each source
         st.subheader("Market Trends")
         display_trend_analysis(market_trend)
         
-        st.subheader("Sentiment Trends")
-        display_trend_analysis(sentiment_trend)
+        # Display sentiment trends in columns
+        cols = st.columns(len(sentiment_trends))
+        for i, (source, trend) in enumerate(sentiment_trends.items()):
+            with cols[i]:
+                st.subheader(f"{source.title()} Sentiment Trends")
+                display_trend_analysis(trend)
         
-        # Create and display visualisation
-        try:
-            fig = create_trend_visualisation(market_data, news_data)
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as viz_error:
-            st.warning(f"⚠️ Unable to create visualization: {str(viz_error)}")
+        # Create and display visualization
+        fig = create_trend_visualisation(
+            st.session_state.market_data,
+            st.session_state.news_data,
+            st.session_state.get('reddit_data'),
+            st.session_state.get('twitter_data')
+        )
+        st.plotly_chart(fig, use_container_width=True)
         
         # Get and display recommendations
-        try:
-            recommendations = trend_analyser.get_trend_recommendations(market_trend, sentiment_trend)
-            if recommendations:
-                display_recommendations(recommendations)
-        except Exception as rec_error:
-            st.warning(f"⚠️ Unable to generate recommendations: {str(rec_error)}")
-        
-        # Add trend summary for download
-        if st.button("Generate Trend Report"):
-            try:
-                report = generate_trend_report(market_trend, sentiment_trend, recommendations)
-                st.download_button(
-                    "Download Trend Report",
-                    report,
-                    "trend_report.txt",
-                    "text/plain",
-                    key='download-trend-report'
-                )
-            except Exception as report_error:
-                st.error(f"❌ Error generating report: {str(report_error)}")
-                
+        recommendations = trend_analyser.get_trend_recommendations(
+            market_trend,
+            sentiment_trends
+        )
+        if recommendations:
+            display_recommendations(recommendations)
+            
     except Exception as e:
-        st.error(f"❌ Error in trend analysis: {str(e)}")
-        st.info("💡 Please ensure you have completed the following steps:")
-        st.write("1. Fetched market data in the Main page")
-        st.write("2. Completed sentiment analysis in the Sentiment Analysis page")
-        if st.button("Show detailed error information"):
-            st.exception(e)
+        st.error(f"Error in trend analysis: {str(e)}")
 
 def generate_trend_report(market_trend, sentiment_trend, recommendations):
     """Generate a detailed trend report with error handling"""

@@ -5,8 +5,123 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from analysers.prediction_analyser import MarketPredictionAnalyser
 
+def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitter_data=None):
+    """Prepare data for prediction with improved column detection and error handling"""
+    try:
+        # Create copies of input data
+        market_data = market_data.copy()
+        news_data = news_data.copy()
+        
+        # Debug information
+        st.write("Market data columns:", market_data.columns.tolist())
+        st.write("News data columns:", news_data.columns.tolist())
+        
+        # Ensure datetime columns
+        market_data['Date'] = pd.to_datetime(market_data['Date'])
+        news_data['Date'] = pd.to_datetime(news_data['Date'])
+        
+        # Convert to date for merging
+        market_data['DateOnly'] = market_data['Date'].dt.date
+        news_data['DateOnly'] = news_data['Date'].dt.date
+        
+        # Find sentiment column in news data
+        news_sentiment_col = None
+        for col in news_data.columns:
+            if 'sentiment' in col.lower() and 'score' in col.lower():
+                news_sentiment_col = col
+                st.write(f"Found news sentiment column: {news_sentiment_col}")
+                break
+                
+        if news_sentiment_col is None:
+            st.error("Could not find sentiment score column in news data")
+            return None
+        
+        # Calculate market features
+        market_data['Returns'] = market_data['Close'].pct_change()
+        market_data['Volatility'] = market_data['Returns'].rolling(window=2, min_periods=1).std()
+        market_data['MA5'] = market_data['Close'].rolling(window=3, min_periods=1).mean()
+        market_data['price_momentum'] = market_data['Close'].pct_change(2)
+        market_data['volume_momentum'] = market_data['Volume'].pct_change(2)
+        market_data['recent_trend'] = market_data['Close'].pct_change(2).rolling(window=2, min_periods=1).mean()
+        
+        # Calculate daily news sentiment
+        daily_news = news_data.groupby('DateOnly')[news_sentiment_col].mean().reset_index()
+        daily_news.columns = ['DateOnly', 'News_Sentiment']
+        
+        # Merge market data with news sentiment
+        combined_data = pd.merge(market_data, daily_news, on='DateOnly', how='left')
+        
+        # Fill missing sentiment values with 0
+        combined_data['News_Sentiment'] = combined_data['News_Sentiment'].fillna(0)
+        
+        # Add Twitter data if available
+        if twitter_data is not None and not twitter_data.empty:
+            st.write("Adding Twitter data to prediction dataset")
+            twitter_data = twitter_data.copy()
+            
+            # Find Twitter sentiment column
+            twitter_sentiment_col = None
+            for col in twitter_data.columns:
+                if 'sentiment' in col.lower() and 'score' in col.lower():
+                    twitter_sentiment_col = col
+                    st.write(f"Found Twitter sentiment column: {twitter_sentiment_col}")
+                    break
+            
+            if twitter_sentiment_col:
+                # Convert date and create DateOnly
+                twitter_data['Date'] = pd.to_datetime(twitter_data['Date'])
+                twitter_data['DateOnly'] = twitter_data['Date'].dt.date
+                
+                # Group by date
+                daily_twitter = twitter_data.groupby('DateOnly')[twitter_sentiment_col].mean().reset_index()
+                daily_twitter.columns = ['DateOnly', 'Twitter_Sentiment']
+                
+                # Merge with combined data
+                combined_data = pd.merge(combined_data, daily_twitter, on='DateOnly', how='left')
+                combined_data['Twitter_Sentiment'] = combined_data['Twitter_Sentiment'].fillna(0)
+        
+        # Add Reddit data if available
+        if reddit_data is not None and not reddit_data.empty:
+            st.write("Adding Reddit data to prediction dataset")
+            reddit_data = reddit_data.copy()
+            
+            # Find Reddit sentiment column
+            reddit_sentiment_col = None
+            for col in reddit_data.columns:
+                if 'sentiment' in col.lower() and 'score' in col.lower():
+                    reddit_sentiment_col = col
+                    st.write(f"Found Reddit sentiment column: {reddit_sentiment_col}")
+                    break
+            
+            if reddit_sentiment_col:
+                # Convert date and create DateOnly
+                reddit_data['Date'] = pd.to_datetime(reddit_data['Date'])
+                reddit_data['DateOnly'] = reddit_data['Date'].dt.date
+                
+                # Group by date
+                daily_reddit = reddit_data.groupby('DateOnly')[reddit_sentiment_col].mean().reset_index()
+                daily_reddit.columns = ['DateOnly', 'Reddit_Sentiment']
+                
+                # Merge with combined data
+                combined_data = pd.merge(combined_data, daily_reddit, on='DateOnly', how='left')
+                combined_data['Reddit_Sentiment'] = combined_data['Reddit_Sentiment'].fillna(0)
+        
+        # Sort by date
+        combined_data = combined_data.sort_values('Date')
+        
+        # Forward fill any remaining NaN values
+        combined_data = combined_data.fillna(method='ffill').fillna(method='bfill')
+        
+        st.success(f"Successfully prepared prediction data with {len(combined_data)} rows")
+        return combined_data
+        
+    except Exception as e:
+        st.error(f"Error preparing prediction data: {str(e)}")
+        st.exception(e)
+        return None
+
 def plot_predictions(historical_data, market_predictions, sentiment_predictions, actual_prices=None):
-    """Create visualisation comparing both prediction types"""
+    """Create visualization comparing prediction types"""
     fig = go.Figure()
 
     # Plot historical data
@@ -21,7 +136,7 @@ def plot_predictions(historical_data, market_predictions, sentiment_predictions,
 
     # Calculate prediction dates
     last_date = historical_data.index[-1]
-    prediction_dates = [last_date + timedelta(days=i+1) for i in range(5)]
+    prediction_dates = [last_date + timedelta(days=i+1) for i in range(len(market_predictions))]
 
     # Plot market-only predictions
     fig.add_trace(
@@ -38,7 +153,7 @@ def plot_predictions(historical_data, market_predictions, sentiment_predictions,
         go.Scatter(
             x=prediction_dates,
             y=sentiment_predictions,
-            name='Sentiment-Enhanced Prediction',
+            name='Sentiment-Enhanced',
             line=dict(color='green', width=2, dash='dash')
         )
     )
@@ -55,19 +170,11 @@ def plot_predictions(historical_data, market_predictions, sentiment_predictions,
         )
 
     fig.update_layout(
-        title="5-Day Price Predictions",
+        title="Price Predictions",
         xaxis_title="Date",
         yaxis_title="Price",
         height=600,
         showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01,
-            bgcolor='rgba(255,255,255,0.8)'
-        ),
-        plot_bgcolor='white',
         hovermode='x unified'
     )
 
@@ -131,219 +238,147 @@ def display_model_metrics(metrics):
         - Direction: {metrics['improvement']['direction_improvement']:.1f}%
         """)
 
-    # Add explanation of metrics
-    st.markdown("""
-    ### Understanding the Metrics
-    
-    1. **Mean Absolute Error (MAE)**
-       - Average absolute difference between predicted and actual prices
-       - Lower is better
-       
-    2. **Mean Absolute Percentage Error (MAPE)**
-       - Average percentage difference from actual prices
-       - Shows prediction accuracy as a percentage
-       
-    3. **Directional Accuracy**
-       - How often the model correctly predicts price movement direction
-       - Higher is better (50% would be random chance)
-    """)
-
-    # Add model comparison summary
-    if metrics['improvement']['mae_reduction'] > 0:
-        st.success(f"""
-            📈 The sentiment-enhanced model shows improvement:
-            - {metrics['improvement']['mae_reduction']:.1f}% reduction in prediction error
-            - {metrics['improvement']['direction_improvement']:.1f}% improvement in directional accuracy
-        """)
-    else:
-        st.warning(f"""
-            ⚠️ The market-only model currently performs better:
-            - Sentiment model has {-metrics['improvement']['mae_reduction']:.1f}% higher prediction error
-            - {-metrics['improvement']['direction_improvement']:.1f}% lower directional accuracy
-        """)
-
-    return
-
 def price_prediction_page():
     st.title("📈 Price Prediction Analysis")
 
-    # Check if required data exists
-    if ('market_data' not in st.session_state or 
-        'news_data' not in st.session_state):
+    # Check for required data
+    required_data = ['market_data', 'news_data']
+    if not all(key in st.session_state for key in required_data):
         st.warning("⚠️ Please complete market and sentiment analysis first")
-        st.info("""
-            To make predictions, we need:
-            1. Market data (from the Market Data page)
-            2. News sentiment data (from the Sentiment Analysis page)
-            3. Reddit sentiment data (optional, but recommended)
-        """)
         return
 
     try:
-        # Create tabs for different sections
-        tabs = st.tabs(["Model Training", "Predictions", "Performance Analysis"])
+        # Initialize predictor
+        predictor = MarketPredictionAnalyser()
+        
+        # Get available data sources
+        data_sources = {
+            'Market Data': st.session_state.market_data,
+            'News Data': st.session_state.news_data,
+            'Reddit Data': st.session_state.get('reddit_data'),
+            'Twitter Data': st.session_state.get('twitter_data')
+        }
+        
+        # Display data shapes for debugging
+        st.subheader("Available Data Sources")
+        for source, data in data_sources.items():
+            if data is not None and not data.empty:
+                st.success(f"✅ {source} available - Shape: {data.shape}")
+                date_range = f"({data['Date'].min().strftime('%Y-%m-%d')} to {data['Date'].max().strftime('%Y-%m-%d')})"
+                st.info(f"{source} date range: {date_range}")
+            else:
+                st.warning(f"⚠️ {source} not available")
+        
+        # Model training section
+        st.header("Model Training")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            sequence_length = st.number_input("Sequence Length (Days)", min_value=2, max_value=10, value=3)
+        
+        with col2:
+            prediction_days = st.number_input("Prediction Days", min_value=1, max_value=5, value=2)
 
-        with tabs[0]:
-            st.header("Model Training")
-            
-            # Model parameters
-            col1, col2 = st.columns(2)
-            with col1:
-                epochs = st.number_input("Training Epochs", min_value=10, max_value=200, value=50)
-                sequence_length = st.number_input("Sequence Length (Days)", min_value=2, max_value=30, value=5)
-            
-            with col2:
-                batch_size = st.number_input("Batch Size", min_value=8, max_value=64, value=32)
-                validation_split = st.slider("Validation Split", min_value=0.1, max_value=0.3, value=0.2)
-
-            if st.button("Train Models"):
-                with st.spinner("Training prediction models..."):
-                    # Display data diagnostics
-                    st.info("Checking available data...")
+        if st.button("Train Models"):
+            with st.spinner("Preparing data for training..."):
+                # Prepare combined data
+                combined_data = prepare_data_for_prediction(
+                    data_sources['Market Data'],
+                    data_sources['News Data'],
+                    data_sources['Reddit Data'],
+                    data_sources['Twitter Data']
+                )
+                
+                if combined_data is None:
+                    st.error("Failed to prepare prediction data")
+                    return
+                
+                # Store combined data in session state
+                st.session_state.combined_data = combined_data
+                
+                # Set sequence length and prediction days
+                predictor.sequence_length = sequence_length
+                predictor.prediction_days = prediction_days
+                
+                # Train market model
+                with st.spinner("Training market-only model..."):
+                    market_success = predictor.train_market_model(combined_data)
                     
-                    if st.session_state.market_data is None or len(st.session_state.market_data) == 0:
-                        st.error("No market data available")
-                        return
-                        
-                    if st.session_state.news_data is None or len(st.session_state.news_data) == 0:
-                        st.error("No news sentiment data available")
-                        return
-                    
-                    # Market Data Diagnostics
-                    st.write("📊 Market Data:")
-                    st.write(f"- Number of market data points: {len(st.session_state.market_data)}")
-                    st.write(f"- Date range: {st.session_state.market_data['Date'].min()} to {st.session_state.market_data['Date'].max()}")
-                    
-                    # News Sentiment Diagnostics
-                    st.write("📰 News Sentiment Data:")
-                    st.write(f"- Number of news sentiment points: {len(st.session_state.news_data)}")
-                    st.write(f"- Date range: {st.session_state.news_data['Date'].min()} to {st.session_state.news_data['Date'].max()}")
-                    
-                    # Reddit Data Diagnostics (if available)
-                    if 'reddit_data' in st.session_state and st.session_state.reddit_data is not None:
-                        st.write("🤖 Reddit Sentiment Data:")
-                        st.write(f"- Number of Reddit sentiment points: {len(st.session_state.reddit_data)}")
-                        st.write(f"- Date range: {st.session_state.reddit_data['Date'].min()} to {st.session_state.reddit_data['Date'].max()}")
-
-                    # Initialize predictor
-                    st.info("Initialising prediction models...")
-                    predictor = MarketPredictionAnalyser()
-                    
-                    # Train market model
-                    st.write("Training market-only model...")
-                    market_history = predictor.train_market_model(
-                        st.session_state.market_data,
-                        epochs=epochs,
-                        batch_size=batch_size
-                    )
-
-                    if market_history:
-                        # Train sentiment model
-                        st.write("Training sentiment-enhanced model...")
-                        sentiment_history = predictor.train_sentiment_model(
-                            st.session_state.market_data,
-                            st.session_state.news_data,
-                            st.session_state.get('reddit_data'),
-                            epochs=epochs,
-                            batch_size=batch_size
-                        )
-
-                        if sentiment_history:
-                            st.session_state.predictor = predictor
-                            st.success("✅ Models trained successfully!")
-                        else:
-                            st.error("❌ Failed to train sentiment-enhanced model")
+                    if market_success:
+                        st.success("✅ Market model trained successfully!")
                     else:
-                        st.error("❌ Failed to train market-only model")
+                        st.error("❌ Failed to train market model")
+                        return
 
-        with tabs[1]:
-            st.header("5-Day Price Predictions")
+                # Train sentiment model
+                with st.spinner("Training sentiment-enhanced model..."):
+                    sentiment_success = predictor.train_sentiment_model(
+                        combined_data,
+                        data_sources['News Data']
+                    )
+                    
+                    if sentiment_success:
+                        st.success("✅ Sentiment model trained successfully!")
+                        st.session_state.predictor = predictor
+                        st.session_state.models_trained = True
+                    else:
+                        st.error("❌ Failed to train sentiment model")
+                        return
 
-            if 'predictor' not in st.session_state:
-                st.warning("⚠️ Please train the models first")
+        # Predictions section
+        if 'models_trained' in st.session_state and st.session_state.models_trained:
+            st.header("Price Predictions")
+            
+            if 'combined_data' not in st.session_state:
+                st.warning("Please train the models first to see predictions")
                 return
-
-            try:
-                # Make predictions
-                market_predictions = st.session_state.predictor.predict_market(
-                    st.session_state.market_data
-                )
                 
-                if market_predictions is None:
-                    st.error("Failed to generate market predictions")
-                    return
-                
+            # Make predictions
+            with st.spinner("Generating predictions..."):
+                market_predictions = st.session_state.predictor.predict_market(st.session_state.combined_data)
                 sentiment_predictions = st.session_state.predictor.predict_with_sentiment(
-                    st.session_state.market_data,
-                    st.session_state.news_data,
-                    st.session_state.get('reddit_data')
-                )
-                
-                if sentiment_predictions is None:
-                    st.error("Failed to generate sentiment-enhanced predictions")
-                    return
-
-                # Display predictions
-                fig = plot_predictions(
-                    st.session_state.market_data.set_index('Date'),
-                    market_predictions,
-                    sentiment_predictions
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Show prediction values
-                st.subheader("Predicted Prices")
-                last_price = st.session_state.market_data['Close'].iloc[-1]
-                dates = [(datetime.now() + timedelta(days=i+1)).strftime('%Y-%m-%d') 
-                         for i in range(len(market_predictions))]
-
-                df_predictions = pd.DataFrame({
-                    'Date': dates,
-                    'Market Model': market_predictions,
-                    'Sentiment Model': sentiment_predictions,
-                    'Market Change %': ((market_predictions - last_price) / last_price * 100),
-                    'Sentiment Change %': ((sentiment_predictions - last_price) / last_price * 100)
-                })
-
-                st.dataframe(
-                    df_predictions.style.format({
-                        'Market Model': '${:,.2f}',
-                        'Sentiment Model': '${:,.2f}',
-                        'Market Change %': '{:,.2f}%',
-                        'Sentiment Change %': '{:,.2f}%'
-                    }),
-                    use_container_width=True
+                    st.session_state.combined_data,
+                    data_sources['News Data']
                 )
 
-            except Exception as e:
-                st.error(f"Error generating predictions: {str(e)}")
-
-        with tabs[2]:
-            st.header("Model Performance Analysis")
-
-            if 'predictor' not in st.session_state:
-                st.warning("⚠️ Please train the models first")
-                return
-
-            try:
                 if market_predictions is not None and sentiment_predictions is not None:
-                    # Get the latest available actual prices
-                    actual_prices = st.session_state.market_data['Close'].iloc[-len(market_predictions):].values
-                    metrics = st.session_state.predictor.evaluate_predictions(
-                        actual_prices,
+                    # Plot predictions
+                    fig = plot_predictions(
+                        st.session_state.combined_data.set_index('Date'),
                         market_predictions,
                         sentiment_predictions
                     )
+                    st.plotly_chart(fig, use_container_width=True)
 
-                    if metrics:
-                        display_model_metrics(metrics)
-            except Exception as e:
-                st.error(f"Error in performance analysis: {str(e)}")
+                    # Show numerical predictions
+                    st.subheader("Predicted Values")
+                    last_price = st.session_state.combined_data['Close'].iloc[-1]
+                    dates = [(datetime.now() + timedelta(days=i+1)).strftime('%Y-%m-%d') 
+                             for i in range(len(market_predictions))]
+
+                    df_predictions = pd.DataFrame({
+                        'Date': dates,
+                        'Market Model': market_predictions,
+                        'Sentiment Model': sentiment_predictions,
+                        'Market Change %': ((market_predictions - last_price) / last_price * 100),
+                        'Sentiment Change %': ((sentiment_predictions - last_price) / last_price * 100)
+                    })
+
+                    st.dataframe(
+                        df_predictions.style.format({
+                            'Market Model': '${:,.2f}',
+                            'Sentiment Model': '${:,.2f}',
+                            'Market Change %': '{:,.2f}%',
+                            'Sentiment Change %': '{:,.2f}%'
+                        }),
+                        use_container_width=True
+                    )
+        else:
+            st.info("👆 Please train the models first to see predictions")
 
     except Exception as e:
-        st.error(f"❌ Error in prediction analysis: {str(e)}")
-        if st.button("Show detailed error information"):
-            st.exception(e)
+        st.error(f"Error in prediction analysis: {str(e)}")
+        st.exception(e)
 
 if __name__ == "__main__":
     price_prediction_page()
