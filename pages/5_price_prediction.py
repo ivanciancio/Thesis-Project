@@ -110,7 +110,7 @@ def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitte
         combined_data = combined_data.sort_values('Date')
         
         # Forward fill any remaining NaN values
-        combined_data = combined_data.fillna(method='ffill').fillna(method='bfill')
+        combined_data = combined_data.ffill().bfill()
         
         st.success(f"Successfully prepared prediction data with {len(combined_data)} rows")
         return combined_data

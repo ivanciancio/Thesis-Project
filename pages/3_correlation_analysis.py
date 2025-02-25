@@ -252,7 +252,7 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, tw
                 # Fill any missing Twitter sentiment with the mean
                 if 'Twitter_Sentiment' in base_data.columns:
                     twitter_mean = base_data['Twitter_Sentiment'].mean()
-                    base_data['Twitter_Sentiment'].fillna(twitter_mean, inplace=True)
+                    base_data['Twitter_Sentiment'] = base_data['Twitter_Sentiment'].fillna(twitter_mean)
                     st.write("Twitter sentiment after merging:", base_data['Twitter_Sentiment'].head())
         
         # Add Reddit data if available
@@ -285,7 +285,7 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, tw
                 # Fill any missing Reddit sentiment with the mean
                 if 'Reddit_Sentiment' in base_data.columns:
                     reddit_mean = base_data['Reddit_Sentiment'].mean()
-                    base_data['Reddit_Sentiment'].fillna(reddit_mean, inplace=True)
+                    base_data['Reddit_Sentiment'] = base_data['Reddit_Sentiment'].fillna(reddit_mean)
             else:
                 st.warning("Could not find sentiment column in Reddit data")
         
@@ -384,8 +384,10 @@ def plot_correlation_matrix(correlation_data):
         textfont={"size": 14, "color": "black"},
         showscale=True,
         colorbar=dict(
-            title="Correlation",
-            titleside="right",
+            title=dict(
+                text="Correlation",
+                side="right"
+            ),
             ticktext=["-1", "-0.5", "0", "0.5", "1"],
             tickvals=[-1, -0.5, 0, 0.5, 1],
             ticks="outside"
@@ -427,7 +429,7 @@ def display_correlation_summary(correlations, metrics_df):
                 return ''
         
         # Style the dataframe
-        styled_df = metrics_df.style.applymap(color_p_value, subset=['P-value'])
+        styled_df = metrics_df.style.map(color_p_value, subset=['P-value'])
         
         st.write("Color coding:")
         st.write("🟢 p < 0.01: Strong evidence")

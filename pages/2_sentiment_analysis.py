@@ -6,7 +6,24 @@ from analysers.sentiment_analyser import FinancialSentimentAnalyser
 from analysers.reddit_analyser import RedditAnalyser
 from analysers.x_analyser import XAnalyser
 from datetime import datetime, timedelta
+import logging
 
+class TorchClassesFilter(logging.Filter):
+    """Filter out annoying torch.classes warnings"""
+    def filter(self, record):
+        if "torch.classes" in record.getMessage():
+            return False
+        return True
+
+# Apply the filter to all handlers
+root_logger = logging.getLogger()
+for handler in root_logger.handlers:
+    handler.addFilter(TorchClassesFilter())
+
+# Also apply to stderr handler which might be created later
+stderr_handler = logging.StreamHandler()
+stderr_handler.addFilter(TorchClassesFilter())
+root_logger.addHandler(stderr_handler)
 
 def plot_daily_sentiment(news_df):
     """Create daily sentiment visualisation"""

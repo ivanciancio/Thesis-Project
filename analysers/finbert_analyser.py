@@ -3,6 +3,23 @@ import torch
 import numpy as np
 from typing import Dict, List, Union
 import logging
+import warnings
+import os
+
+# Suppress specific PyTorch warnings
+warnings.filterwarnings('ignore', message='.*torch.classes.*')
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', message='.*Trying to instantiate.*')
+
+# Suppress tokenizers parallelism warning
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+# Reduce logging level for PyTorch/transformers
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("torch").setLevel(logging.ERROR)
+
+# Set PyTorch C++ logging level to suppress warnings
+os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
 
 class FinBERTAnalyser:
     """

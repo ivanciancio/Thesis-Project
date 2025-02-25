@@ -1,6 +1,14 @@
+import warnings
+import os
+
+# Suppress PyTorch warnings
+warnings.filterwarnings('ignore', message='.*torch.classes.*')
+warnings.filterwarnings('ignore', message='.*Trying to instantiate.*')
+os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 import streamlit as st
 import sys
-import os
 from pathlib import Path
 from datetime import datetime, timedelta
 
