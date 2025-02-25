@@ -1,3 +1,15 @@
+import os
+import sys
+from pathlib import Path
+
+# Get the absolute path to the project root directory
+current_file = Path(__file__).resolve()
+project_root = current_file.parent.parent  # This goes up one level from the 'pages' directory
+
+# Add the project root to the Python path
+sys.path.append(str(project_root))
+
+# Now continue with the imports
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,10 +24,6 @@ def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitte
         market_data = market_data.copy()
         news_data = news_data.copy()
         
-        # Debug information
-        st.write("Market data columns:", market_data.columns.tolist())
-        st.write("News data columns:", news_data.columns.tolist())
-        
         # Ensure datetime columns
         market_data['Date'] = pd.to_datetime(market_data['Date'])
         news_data['Date'] = pd.to_datetime(news_data['Date'])
@@ -29,7 +37,6 @@ def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitte
         for col in news_data.columns:
             if 'sentiment' in col.lower() and 'score' in col.lower():
                 news_sentiment_col = col
-                st.write(f"Found news sentiment column: {news_sentiment_col}")
                 break
                 
         if news_sentiment_col is None:
@@ -56,7 +63,6 @@ def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitte
         
         # Add Twitter data if available
         if twitter_data is not None and not twitter_data.empty:
-            st.write("Adding Twitter data to prediction dataset")
             twitter_data = twitter_data.copy()
             
             # Find Twitter sentiment column
@@ -64,7 +70,6 @@ def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitte
             for col in twitter_data.columns:
                 if 'sentiment' in col.lower() and 'score' in col.lower():
                     twitter_sentiment_col = col
-                    st.write(f"Found Twitter sentiment column: {twitter_sentiment_col}")
                     break
             
             if twitter_sentiment_col:
@@ -82,7 +87,6 @@ def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitte
         
         # Add Reddit data if available
         if reddit_data is not None and not reddit_data.empty:
-            st.write("Adding Reddit data to prediction dataset")
             reddit_data = reddit_data.copy()
             
             # Find Reddit sentiment column
@@ -90,7 +94,6 @@ def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitte
             for col in reddit_data.columns:
                 if 'sentiment' in col.lower() and 'score' in col.lower():
                     reddit_sentiment_col = col
-                    st.write(f"Found Reddit sentiment column: {reddit_sentiment_col}")
                     break
             
             if reddit_sentiment_col:
@@ -117,7 +120,6 @@ def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitte
         
     except Exception as e:
         st.error(f"Error preparing prediction data: {str(e)}")
-        st.exception(e)
         return None
 
 def plot_predictions(historical_data, market_predictions, sentiment_predictions, actual_prices=None):
@@ -259,13 +261,14 @@ def price_prediction_page():
             'Twitter Data': st.session_state.get('twitter_data')
         }
         
-        # Display data shapes for debugging
+        # Display data availability
         st.subheader("Available Data Sources")
         for source, data in data_sources.items():
             if data is not None and not data.empty:
-                st.success(f"✅ {source} available - Shape: {data.shape}")
-                date_range = f"({data['Date'].min().strftime('%Y-%m-%d')} to {data['Date'].max().strftime('%Y-%m-%d')})"
-                st.info(f"{source} date range: {date_range}")
+                st.success(f"✅ {source} available")
+                if 'Date' in data.columns:
+                    date_range = f"({data['Date'].min().strftime('%Y-%m-%d')} to {data['Date'].max().strftime('%Y-%m-%d')})"
+                    st.info(f"{source} date range: {date_range}")
             else:
                 st.warning(f"⚠️ {source} not available")
         
@@ -378,7 +381,6 @@ def price_prediction_page():
 
     except Exception as e:
         st.error(f"Error in prediction analysis: {str(e)}")
-        st.exception(e)
 
 if __name__ == "__main__":
     price_prediction_page()

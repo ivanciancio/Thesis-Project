@@ -8,7 +8,7 @@ current_dir = Path(__file__).resolve().parent
 if str(current_dir) not in sys.path:
     sys.path.append(str(current_dir))
     
-# Add these lines at the very top of your file, before any other imports
+# Suppress warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', message='.*torch.classes.*')
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -20,17 +20,12 @@ from textblob import TextBlob
 from typing import Dict, List, Optional, Union
 import logging
 
+# Configure logging
+logging.basicConfig(level=logging.ERROR)
+
 try:
-    # Try different import paths
-    try:
-        from .finbert_analyser import FinBERTAnalyser  # Same directory
-    except ImportError:
-        try:
-            from analysers.finbert_analyser import FinBERTAnalyser  # From package
-        except ImportError:
-            from finbert_analyser import FinBERTAnalyser  # Direct import
+    from finbert_analyser import FinBERTAnalyser
 except ImportError as e:
-    logging.error(f"Could not import FinBERTAnalyser: {str(e)}")
     FinBERTAnalyser = None
 
 class FinancialSentimentAnalyser:
@@ -62,34 +57,28 @@ class FinancialSentimentAnalyser:
             if FinBERTAnalyser is not None:
                 self.finbert = FinBERTAnalyser()
                 self.models['finbert'] = True
+                # Update weights if FinBERT is available
+                if self.vader:
+                    self.model_weights.update({
+                        'textblob': 0.2,
+                        'vader': 0.3,
+                        'finbert': 0.5
+                    })
+                else:
+                    self.model_weights.update({
+                        'textblob': 0.3,
+                        'vader': 0.0,
+                        'finbert': 0.7
+                    })
             else:
                 self.finbert = None
                 self.models['finbert'] = False
-                logging.warning("FinBERT is not available - continuing without it")
-            # Update weights if FinBERT is available
-            if self.vader:
-                self.model_weights.update({
-                    'textblob': 0.2,
-                    'vader': 0.3,
-                    'finbert': 0.5
-                })
-            else:
-                self.model_weights.update({
-                    'textblob': 0.3,
-                    'vader': 0.0,
-                    'finbert': 0.7
-                })
-        except Exception as e:
+        except Exception:
             self.finbert = None
             self.models['finbert'] = False
-            logging.error(f"Error initialising FinBERT: {str(e)}")
         
         # Normalise weights based on available models
         self._normalise_weights()
-        
-        # Setup logging with less verbosity
-        logging.basicConfig(level=logging.ERROR)
-        self.logger = logging.getLogger(__name__)
 
     def _normalise_weights(self):
         """Normalise model weights based on available models"""
@@ -130,7 +119,7 @@ class FinancialSentimentAnalyser:
                 'model': 'textblob'
             }
         except Exception as e:
-            self.logger.error(f"TextBlob analysis error: {str(e)}")
+            logging.error(f"TextBlob analysis error: {str(e)}")
             return {
                 'score': 0,
                 'confidence': 0,
@@ -163,7 +152,7 @@ class FinancialSentimentAnalyser:
                 }
             }
         except Exception as e:
-            self.logger.error(f"VADER analysis error: {str(e)}")
+            logging.error(f"VADER analysis error: {str(e)}")
             return None
 
     def analyse_with_finbert(self, text: str) -> Optional[Dict]:
@@ -189,7 +178,7 @@ class FinancialSentimentAnalyser:
                 'detail_scores': result['probabilities']
             }
         except Exception as e:
-            self.logger.error(f"FinBERT analysis error: {str(e)}")
+            logging.error(f"FinBERT analysis error: {str(e)}")
             return None
 
     def analyse_sentiment(self, text: str) -> Dict:
@@ -263,7 +252,7 @@ class FinancialSentimentAnalyser:
             }
 
         except Exception as e:
-            self.logger.error(f"Error in sentiment analysis: {str(e)}")
+            logging.error(f"Error in sentiment analysis: {str(e)}")
             return self._get_neutral_result()
 
     def _calculate_polarisation(self, model_results: Dict) -> Dict:

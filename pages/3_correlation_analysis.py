@@ -5,7 +5,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from scipy import stats
-from analysers.x_analyser import XAnalyser
 
 def correlation_analysis_page():
     st.title("🔗 Correlation Analysis")
@@ -51,7 +50,6 @@ def correlation_analysis_page():
             twitter_data = None
             if 'twitter_data' in st.session_state and st.session_state.twitter_data is not None:
                 twitter_data = st.session_state.twitter_data
-                st.write("Twitter data columns:", twitter_data.columns.tolist())
             
             # Process Reddit data if available
             reddit_data = None
@@ -65,9 +63,7 @@ def correlation_analysis_page():
             if not combined_data.empty:
                 st.success("✅ Data alignment successful")
                 st.write("Combined Data Summary:")
-                st.write("- Shape:", combined_data.shape)
-                st.write("- Columns:", combined_data.columns.tolist())
-                st.write("- Sample:", combined_data.head(3))
+                st.write(f"- Shape: {combined_data.shape}")
                 
                 # Calculate correlations
                 st.header("Correlation Analysis")
@@ -128,19 +124,11 @@ def interpret_correlation_direction(correlation):
     return "positive" if correlation > 0 else "negative"
 
 def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, twitter_data=None):
-    """Align dates between market data and sentiment data with improved debugging"""
+    """Align dates between market data and sentiment data"""
     try:
         # Create copies of input data
         market_data = market_data.copy()
         news_data = news_data.copy()
-        
-        # Debug print column names
-        print("Market data columns:", market_data.columns.tolist())
-        print("News data columns:", news_data.columns.tolist())
-        if twitter_data is not None:
-            print("Twitter data columns:", twitter_data.columns.tolist())
-        if reddit_data is not None:
-            print("Reddit data columns:", reddit_data.columns.tolist())
         
         # Convert all dates to datetime for consistent handling
         market_data['Date'] = pd.to_datetime(market_data['Date'])
@@ -178,28 +166,21 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, tw
         
         # Add Twitter data if available
         if twitter_data is not None and not twitter_data.empty:
-            st.write("Processing Twitter data for correlation analysis...")
             # Convert Twitter dates
             twitter_data = twitter_data.copy()
             twitter_data['Date'] = pd.to_datetime(twitter_data['Date'])
             twitter_data['DateOnly'] = twitter_data['Date'].dt.date
-            
-            # Debug Twitter data
-            st.write("Twitter date range:", twitter_data['Date'].min(), "to", twitter_data['Date'].max())
             
             # Find sentiment column - try both Sentiment_Score and other variations
             twitter_sentiment_col = None
             for col in twitter_data.columns:
                 if 'sentiment' in col.lower() and 'score' in col.lower():
                     twitter_sentiment_col = col
-                    st.write(f"Found Twitter sentiment column: {twitter_sentiment_col}")
                     break
             
             if twitter_sentiment_col is None:
-                st.warning("Could not find sentiment score column in Twitter data")
                 # Check if we can use raw Twitter data instead
                 if 'twitter_raw_data' in st.session_state and not st.session_state.twitter_raw_data.empty:
-                    st.write("Using raw Twitter data instead...")
                     raw_twitter = st.session_state.twitter_raw_data.copy()
                     raw_twitter['Date'] = pd.to_datetime(raw_twitter['Date'])
                     raw_twitter['DateOnly'] = raw_twitter['Date'].dt.date
@@ -208,14 +189,10 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, tw
                     for col in raw_twitter.columns:
                         if 'sentiment' in col.lower() and 'score' in col.lower():
                             twitter_sentiment_col = col
-                            st.write(f"Found Twitter sentiment column in raw data: {twitter_sentiment_col}")
                             
                             # Group Twitter data by date
                             twitter_grouped = raw_twitter.groupby('DateOnly')[twitter_sentiment_col].mean().reset_index()
                             twitter_grouped.columns = ['DateOnly', 'Twitter_Sentiment']
-                            
-                            # Display sample of Twitter sentiment data
-                            st.write("Twitter sentiment sample:", twitter_grouped.head())
                             
                             # Merge Twitter data with base data
                             base_data = pd.merge(
@@ -228,18 +205,12 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, tw
                             # Fill any missing Twitter sentiment with the mean
                             if 'Twitter_Sentiment' in base_data.columns:
                                 twitter_mean = base_data['Twitter_Sentiment'].mean()
-                                base_data['Twitter_Sentiment'].fillna(twitter_mean, inplace=True)
+                                base_data['Twitter_Sentiment'] = base_data['Twitter_Sentiment'].fillna(twitter_mean)
                             break
-                    
-                    if twitter_sentiment_col is None:
-                        st.error("Could not find sentiment column in raw Twitter data either")
             else:
                 # Group Twitter data by date
                 twitter_grouped = twitter_data.groupby('DateOnly')[twitter_sentiment_col].mean().reset_index()
                 twitter_grouped.columns = ['DateOnly', 'Twitter_Sentiment']
-                
-                # Display sample of Twitter sentiment data
-                st.write("Twitter sentiment sample:", twitter_grouped.head())
                 
                 # Merge Twitter data
                 base_data = pd.merge(
@@ -253,7 +224,6 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, tw
                 if 'Twitter_Sentiment' in base_data.columns:
                     twitter_mean = base_data['Twitter_Sentiment'].mean()
                     base_data['Twitter_Sentiment'] = base_data['Twitter_Sentiment'].fillna(twitter_mean)
-                    st.write("Twitter sentiment after merging:", base_data['Twitter_Sentiment'].head())
         
         # Add Reddit data if available
         if reddit_data is not None and not reddit_data.empty:
@@ -295,16 +265,10 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, tw
         # Sort by date
         final_data = base_data.sort_values('Date')
         
-        # Display the final data columns and sample
-        st.write("Final aligned data columns:", final_data.columns.tolist())
-        st.write("Final aligned data shape:", final_data.shape)
-        st.write("Sample of final aligned data:", final_data.head(3))
-        
         return final_data
         
     except Exception as e:
         st.error(f"Error in date alignment: {str(e)}")
-        st.exception(e)
         return pd.DataFrame()
 
 def calculate_correlation_metrics(data):
@@ -363,7 +327,6 @@ def calculate_correlation_metrics(data):
         
     except Exception as e:
         st.error(f"Error calculating correlations: {str(e)}")
-        st.exception(e)
         return pd.DataFrame(), pd.DataFrame()
 
 def plot_correlation_matrix(correlation_data):
@@ -439,27 +402,6 @@ def display_correlation_summary(correlations, metrics_df):
         st.dataframe(styled_df)
     else:
         st.warning("No correlation data available for analysis")
-
-def interpret_correlation(correlation):
-    """Get detailed interpretation of correlation value"""
-    if np.isnan(correlation):
-        return "insufficient data"
-        
-    abs_corr = abs(correlation)
-    direction = "positive" if correlation > 0 else "negative"
-    
-    if abs_corr < 0.2:
-        strength = "very weak"
-    elif abs_corr < 0.4:
-        strength = "weak"
-    elif abs_corr < 0.6:
-        strength = "moderate"
-    elif abs_corr < 0.8:
-        strength = "strong"
-    else:
-        strength = "very strong"
-        
-    return f"{strength} {direction}"
 
 if __name__ == "__main__":
     correlation_analysis_page()

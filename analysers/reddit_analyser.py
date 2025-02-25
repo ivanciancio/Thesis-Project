@@ -105,7 +105,7 @@ class RedditAnalyser:
                                 query,
                                 sort='new',
                                 time_filter='year',
-                                limit=200  # Increased limit for better coverage
+                                limit=200
                             )
                             
                             for post in posts:
@@ -377,33 +377,6 @@ class RedditAnalyser:
         
         st.plotly_chart(fig, use_container_width=True)
 
-        # Sentiment polarisation analysis
-        st.subheader("Sentiment Polarisation Analysis")
-        
-        # Create polarisation heatmap
-        polarisation_data = df.pivot_table(
-            values='Polarisation_Std',
-            index='Subreddit',
-            columns=pd.Grouper(key='Date', freq='W'),
-            aggfunc='mean'
-        ).fillna(0)
-
-        fig = go.Figure(data=go.Heatmap(
-            z=polarisation_data.values,
-            x=polarisation_data.columns,
-            y=polarisation_data.index,
-            colorscale='RdBu',
-            colorbar=dict(title='Polarisation Strength')
-        ))
-
-        fig.update_layout(
-            title="Sentiment Polarisation Over Time by Subreddit",
-            xaxis_title="Date",
-            yaxis_title="Subreddit"
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
     def display_platform_comparison(self, df: pd.DataFrame):
         """Display platform comparison analysis"""
         st.subheader("Platform Comparison")
@@ -413,8 +386,7 @@ class RedditAnalyser:
             'Sentiment_Score': ['mean', 'std'],
             'Score': 'sum',
             'Comments': 'mean',
-            'Polarisation_Std': 'mean',
-            'Model_Disagreement': 'mean'
+            'Polarisation': 'mean'
         }).round(3)
 
         st.write("Platform Comparison Metrics:")
@@ -434,7 +406,12 @@ class RedditAnalyser:
             y=platform_correlations.index,
             colorscale='RdBu',
             zmin=-1, zmax=1,
-            colorbar=dict(title='Correlation')
+            colorbar=dict(
+                title=dict(
+                    text="Correlation",
+                    side="right"
+                )
+            )
         ))
 
         fig.update_layout(
@@ -486,124 +463,6 @@ class RedditAnalyser:
             ]].sort_values('Date', ascending=False),
             use_container_width=True
         )
-
-    def analyse_market_impact(self, reddit_df: pd.DataFrame, market_data: pd.DataFrame):
-        """
-        Analyse the impact of Reddit sentiment on market behavior
-        
-        Args:
-            reddit_df (pd.DataFrame): Analysed Reddit data
-            market_data (pd.DataFrame): Market price/volume data
-        """
-        if reddit_df.empty or market_data.empty:
-            return None
-
-        # Aggregate daily sentiment
-        daily_sentiment = reddit_df.groupby(pd.Grouper(key='Date', freq='D')).agg({
-            'Sentiment_Score': 'mean',
-            'Polarisation_Std': 'mean',
-            'Score': 'sum',
-            'Comments': 'sum'
-        }).fillna(0)
-
-        # Merge with market data
-        combined_data = pd.merge(
-            daily_sentiment,
-            market_data,
-            left_index=True,
-            right_index=True,
-            how='inner'
-        )
-
-        # Calculate correlations
-        correlations = self.calculate_market_correlations(combined_data)
-        
-        # Analyse lead-lag relationships
-        lead_lag = self.analyse_lead_lag_relationship(combined_data)
-        
-        # Analyse volatility impact
-        volatility_impact = self.analyse_volatility_impact(combined_data)
-
-        return {
-            'correlations': correlations,
-            'lead_lag': lead_lag,
-            'volatility_impact': volatility_impact,
-            'combined_data': combined_data
-        }
-
-    def calculate_market_correlations(self, data: pd.DataFrame) -> Dict:
-        """Calculate correlations between sentiment and market metrics"""
-        # Calculate various correlations
-        price_corr = stats.pearsonr(data['Sentiment_Score'], data['Close'])[0]
-        volume_corr = stats.pearsonr(data['Sentiment_Score'], data['Volume'])[0]
-        volatility_corr = stats.pearsonr(data['Polarisation_Std'], data['Volatility'])[0]
-
-        return {
-            'sentiment_price_correlation': price_corr,
-            'sentiment_volume_correlation': volume_corr,
-            'polarisation_volatility_correlation': volatility_corr
-        }
-
-    def analyse_lead_lag_relationship(self, data: pd.DataFrame) -> Dict:
-        """Analyse lead-lag relationships between sentiment and market movements"""
-        max_lag = 5  # Maximum number of days to check
-        
-        # Initialise results
-        lag_correlations = {
-            'sentiment_returns': [],
-            'returns_sentiment': []
-        }
-        
-        # Calculate daily returns
-        data['Returns'] = data['Close'].pct_change()
-        
-        # Calculate lagged correlations
-        for lag in range(1, max_lag + 1):
-            # Sentiment leading returns
-            lag_correlations['sentiment_returns'].append({
-                'lag': lag,
-                'correlation': stats.pearsonr(
-                    data['Sentiment_Score'].shift(lag),
-                    data['Returns']
-                )[0]
-            })
-            
-            # Returns leading sentiment
-            lag_correlations['returns_sentiment'].append({
-                'lag': lag,
-                'correlation': stats.pearsonr(
-                    data['Returns'].shift(lag),
-                    data['Sentiment_Score']
-                )[0]
-            })
-        
-        return lag_correlations
-
-    def analyse_volatility_impact(self, data: pd.DataFrame) -> Dict:
-        """Analyse how sentiment polarisation affects market volatility"""
-        # Calculate sentiment volatility
-        data['Sentiment_Volatility'] = data['Sentiment_Score'].rolling(window=5).std()
-        
-        # Group by polarisation levels
-        data['Polarisation_Level'] = pd.qcut(data['Polarisation_Std'], q=3, labels=['Low', 'Medium', 'High'])
-        
-        volatility_by_polarisation = data.groupby('Polarisation_Level')['Volatility'].agg([
-            'mean', 'std', 'count'
-        ]).to_dict()
-        
-        # Test for significant differences
-        high_vol = data[data['Polarisation_Level'] == 'High']['Volatility']
-        low_vol = data[data['Polarisation_Level'] == 'Low']['Volatility']
-        
-        t_stat, p_value = stats.ttest_ind(high_vol, low_vol)
-        
-        return {
-            'volatility_by_polarisation': volatility_by_polarisation,
-            'statistical_test': {
-                't_statistic': t_stat,
-                'p_value': p_value
-            }
-        }
 
     def handle_error(self, error_type: str, error_message: str, context: str = None):
         """Handle and log errors"""

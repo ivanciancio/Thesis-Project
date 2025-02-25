@@ -35,7 +35,6 @@ class MarketPredictionAnalyser:
             missing_features = [f for f in self.market_features if f not in data.columns]
             if missing_features:
                 st.error(f"Missing features: {missing_features}")
-                st.write("Available columns:", data.columns.tolist())
                 return None, None
 
             X = []
@@ -72,8 +71,7 @@ class MarketPredictionAnalyser:
 
     def prepare_sentiment_enhanced_data(self, market_data, news_data):
         """
-        Prepare market and sentiment data for training with better error handling
-        and robust column name detection - with specific error fix
+        Prepare market and sentiment data for training with error handling
         """
         try:
             # Input validation
@@ -89,14 +87,6 @@ class MarketPredictionAnalyser:
             market = market_data.copy()
             news = news_data.copy()
             
-            # Debug information
-            st.write("Market data shape:", market.shape)
-            st.write("News data shape:", news.shape)
-            
-            # Print actual columns for debugging
-            st.write("Market columns:", market.columns.tolist())
-            st.write("News columns:", news.columns.tolist())
-            
             # Ensure datetime format
             market['Date'] = pd.to_datetime(market['Date'])
             news['Date'] = pd.to_datetime(news['Date'])
@@ -110,7 +100,6 @@ class MarketPredictionAnalyser:
             for col in news.columns:
                 if 'sentiment' in col.lower() and 'score' in col.lower():
                     sentiment_col = col
-                    st.write(f"Found sentiment column: {sentiment_col}")
                     break
                     
             if sentiment_col is None:
@@ -121,26 +110,17 @@ class MarketPredictionAnalyser:
             daily_sentiment = news.groupby('DateOnly')[sentiment_col].mean().reset_index()
             daily_sentiment.columns = ['DateOnly', 'News_Sentiment']
             
-            # Debug information
-            st.write("Daily sentiment shape:", daily_sentiment.shape)
-            st.write("Daily sentiment columns:", daily_sentiment.columns.tolist())
-            
             # Merge data
             data = pd.merge(market, daily_sentiment, on='DateOnly', how='left')
             
             # Verify News_Sentiment exists
             if 'News_Sentiment' not in data.columns:
                 st.error("News_Sentiment column not found after merge")
-                st.write("Available columns after merge:", data.columns.tolist())
                 # Fix it by creating it if needed
                 data['News_Sentiment'] = 0
             
             # Fill missing sentiment values
             data['News_Sentiment'] = data['News_Sentiment'].fillna(0)
-            
-            # Debug information
-            st.write("Combined data shape:", data.shape)
-            st.write("Combined data columns:", data.columns.tolist())
             
             # Verify minimum required data points
             if len(data) < self.sequence_length + self.prediction_days:
@@ -163,8 +143,6 @@ class MarketPredictionAnalyser:
             features = market_features + ['News_Sentiment']
             self.used_features = features
             
-            st.write("Features used for prediction:", features)
-            
             # Create sequences
             X = []
             y = []
@@ -186,8 +164,7 @@ class MarketPredictionAnalyser:
                     if len(target) == self.prediction_days:
                         X.append(sequence)
                         y.append(target)
-                except Exception as e:
-                    st.warning(f"Error creating sequence at index {i}: {str(e)}")
+                except Exception:
                     continue
             
             if not X:
@@ -205,12 +182,10 @@ class MarketPredictionAnalyser:
             
         except Exception as e:
             st.error(f"Error in prepare_sentiment_enhanced_data: {str(e)}")
-            st.exception(e)
             return None, None
 
     def train_market_model(self, market_data):
         try:
-            st.write("Training market model...")
             X, y = self.prepare_market_data(market_data)
             
             if X is None or y is None:
@@ -232,19 +207,8 @@ class MarketPredictionAnalyser:
             return False
 
     def train_sentiment_model(self, market_data, news_data):
-        """Train sentiment-enhanced model with minimal approach"""
+        """Train sentiment-enhanced model"""
         try:
-            st.write("Training sentiment-enhanced model...")
-            
-            # Validate input data
-            if market_data is None or news_data is None:
-                st.error("Missing input data")
-                return False
-                    
-            # Show data info
-            st.write("Market data shape:", market_data.shape)
-            st.write("News data shape:", news_data.shape)
-            
             # Create copies to avoid modifying originals
             market_copy = market_data.copy()
             news_copy = news_data.copy()
@@ -254,7 +218,6 @@ class MarketPredictionAnalyser:
             for col in news_copy.columns:
                 if 'sentiment' in col.lower() and 'score' in col.lower():
                     sentiment_col = col
-                    st.write(f"Found sentiment column: {sentiment_col}")
                     break
             
             # Handle case where sentiment column is not found
@@ -284,13 +247,11 @@ class MarketPredictionAnalyser:
                 combined['News_Sentiment'] = 0
             else:
                 # Fill missing values
-                combined['News_Sentiment'].fillna(0, inplace=True)
+                combined['News_Sentiment'] = combined['News_Sentiment'].fillna(0)
             
             # Prepare features - use core features and News_Sentiment
             features = ['Open', 'High', 'Low', 'Close', 'Volume', 'News_Sentiment']
             self.used_features = features
-            
-            st.write("Features used for prediction:", features)
             
             # Create sequences
             X = []
@@ -322,8 +283,7 @@ class MarketPredictionAnalyser:
                     if len(target) == self.prediction_days:
                         X.append(sequence)
                         y.append(target)
-                except Exception as e:
-                    st.warning(f"Error processing sequence at index {i}: {str(e)}")
+                except Exception:
                     continue
             
             if not X:
@@ -350,7 +310,6 @@ class MarketPredictionAnalyser:
             
         except Exception as e:
             st.error(f"Error training sentiment model: {str(e)}")
-            st.exception(e)
             return False
 
     def predict_market(self, market_data):
@@ -387,7 +346,7 @@ class MarketPredictionAnalyser:
             return None
 
     def predict_with_sentiment(self, market_data, news_data):
-        """Predict with sentiment model using minimal approach"""
+        """Predict with sentiment model"""
         try:
             if self.sentiment_enhanced_model is None:
                 raise ValueError("Sentiment-enhanced model has not been trained")
@@ -428,7 +387,7 @@ class MarketPredictionAnalyser:
                 combined['News_Sentiment'] = 0
             else:
                 # Fill missing values
-                combined['News_Sentiment'].fillna(0, inplace=True)
+                combined['News_Sentiment'] = combined['News_Sentiment'].fillna(0)
             
             # Get features - use the same as in training
             features = self.used_features
@@ -456,7 +415,6 @@ class MarketPredictionAnalyser:
             
         except Exception as e:
             st.error(f"Error in predict_with_sentiment: {str(e)}")
-            st.exception(e)
             return None
 
     def evaluate_predictions(self, actual_prices, market_predictions, sentiment_predictions):
@@ -502,10 +460,6 @@ class MarketPredictionAnalyser:
                     'direction_improvement': (sentiment_dir_acc - market_dir_acc) * 100
                 }
             }
-            
-            # Print evaluation metrics
-            st.write("Evaluation Results:")
-            st.write(results)
             
             return results
             

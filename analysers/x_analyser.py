@@ -5,9 +5,8 @@ from datetime import datetime, timezone, timedelta
 import logging
 import streamlit as st
 import plotly.graph_objects as go
-import plotly.express as px
 import time
-import random  # Add this import for the random module
+import random
 
 class RateLimiter:
     def __init__(self):
@@ -69,45 +68,6 @@ class XAnalyser:
             'errors': []
         }
 
-    def verify_twitter_data(self):
-        """Verify Twitter data in session state"""
-        if 'twitter_data' in st.session_state:
-            twitter_data = st.session_state.twitter_data
-            
-            st.write("Twitter Data Verification:")
-            st.write("- Shape:", twitter_data.shape)
-            st.write("- Columns:", twitter_data.columns.tolist())
-            st.write("- Date Range:", twitter_data['Date'].min(), "to", twitter_data['Date'].max())
-            st.write("- Sample of Sentiment Scores:", twitter_data['Sentiment_Score'].head())
-            
-            # Verify sentiment scores
-            sentiment_stats = twitter_data['Sentiment_Score'].describe()
-            st.write("Sentiment Score Statistics:", sentiment_stats)
-            
-            return True
-        else:
-            st.warning("No Twitter data found in session state. Please run Twitter analysis first.")
-            return False
-
-    def save_twitter_data(self, twitter_data):
-        """Save Twitter data to session state with verification"""
-        try:
-            # Save to session state
-            st.session_state.twitter_data = twitter_data
-            
-            # Verify save was successful
-            if 'twitter_data' in st.session_state:
-                saved_data = st.session_state.twitter_data
-                if saved_data.equals(twitter_data):
-                    st.success("Twitter data successfully saved!")
-                    return True
-                else:
-                    st.error("Twitter data verification failed!")
-                    return False
-        except Exception as e:
-            st.error(f"Error saving Twitter data: {str(e)}")
-            return False
-        
     def initialise_client(self):
         """Initialise X API v2 client with OAuth 2.0"""
         try:
@@ -215,7 +175,6 @@ class XAnalyser:
             # Process each query
             for query_idx, query in enumerate(search_queries, 1):
                 st.write(f"Processing query {query_idx}/{len(search_queries)}")
-                st.write(f"Searching for: {query}")
                 
                 try:
                     # Use search_recent_tweets instead of search_all_tweets
@@ -306,48 +265,6 @@ class XAnalyser:
         except Exception as e:
             self.handle_error('general', str(e))
             return pd.DataFrame()
-        
-    def _adjust_date_to_range(self, created_date, start_date, end_date):
-        """
-        Adjust tweet date to fall within our target range while preserving month/day
-        This creates a synthetic historical dataset from recent tweets
-        """
-        # Extract month and day from the created date
-        month = created_date.month
-        day = created_date.day
-        
-        # Get a random date within the target range
-        date_range = (end_date - start_date).days
-        if date_range <= 0:
-            # If range is zero or negative, use the start date
-            random_date = start_date
-        else:
-            # Otherwise, pick a random date within the range
-            random_offset = random.randint(0, date_range)
-            random_date = start_date + timedelta(days=random_offset)
-        
-        # Try to construct a date with the original month/day in the target year
-        try:
-            adjusted_date = datetime(
-                year=random_date.year,
-                month=month,
-                day=day,
-                hour=created_date.hour,
-                minute=created_date.minute,
-                second=created_date.second
-            )
-            
-            # Verify the adjusted date is within our range
-            if adjusted_date < start_date:
-                adjusted_date = start_date
-            elif adjusted_date > end_date:
-                adjusted_date = end_date
-                
-        except ValueError:
-            # Handle invalid dates (like February 29 in non-leap years)
-            adjusted_date = random_date
-            
-        return adjusted_date
 
     def process_batch(self, batch_df: pd.DataFrame, query_stats: dict) -> pd.DataFrame:
         """Process a batch of tweets with safer engagement calculation"""
@@ -544,7 +461,7 @@ class XAnalyser:
                 numeric_columns = hourly_data.select_dtypes(include=[np.number]).columns
                 hourly_data[numeric_columns] = hourly_data[numeric_columns].astype(float)
                 
-                # For debugging, generate a daily aggregation specifically for correlation analysis
+                # For direct correlation analysis, generate a daily aggregation
                 daily_data = raw_tweet_df.groupby(raw_tweet_df['Date'].dt.date).agg({
                     'Sentiment_Score': 'mean',
                     'Engagement_Score': 'mean',
@@ -552,9 +469,9 @@ class XAnalyser:
                 }).reset_index()
                 daily_data.columns = ['Date', 'Sentiment_Score', 'Engagement_Mean', 'Tweet_Count']
                 
-                # Store this in session state as well for direct correlation access
+                # Store this in session state for correlation analysis
                 st.session_state.twitter_daily_data = daily_data
-                st.success(f"✅ Also saved daily aggregated data with {len(daily_data)} days for correlation analysis")
+                st.success(f"✅ Also saved daily aggregated data for correlation analysis")
                 
                 return hourly_data
             else:
@@ -563,7 +480,6 @@ class XAnalyser:
                 
         except Exception as e:
             st.error(f"Error in sentiment analysis: {str(e)}")
-            st.exception(e)  # This will show the full error traceback
             return pd.DataFrame()
 
     def plot_sentiment_trend(self, df: pd.DataFrame) -> go.Figure:
@@ -712,7 +628,7 @@ class XAnalyser:
             'type': error_type,
             'message': error_message,
             'context': context,
-            'timestamp': pd.Timestamp.now(tz='UTC')  # Use pandas timestamp for consistency
+            'timestamp': pd.Timestamp.now(tz='UTC')
         }
         self.metrics['errors'].append(error_entry)
         
