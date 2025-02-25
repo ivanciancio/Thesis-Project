@@ -372,33 +372,3 @@ class FinancialSentimentAnalyser:
             'average_polarisation': np.mean(polarisations),
             'max_polarisation': max(polarisations)
         }
-
-    def calculate_temporal_sentiment(self, texts: List[str], dates: List[Union[str, pd.Timestamp]]) -> pd.DataFrame:
-        """
-        Calculate sentiment over time for a series of texts
-        
-        Args:
-            texts (List[str]): List of texts
-            dates (List[Union[str, pd.Timestamp]]): Corresponding dates
-            
-        Returns:
-            pd.DataFrame: Temporal sentiment analysis
-        """
-        results = self.analyse_text_batch(texts)
-        
-        # Create DataFrame with dates and sentiment scores
-        df = pd.DataFrame({
-            'date': pd.to_datetime(dates),
-            'sentiment_score': [r['score'] for r in results],
-            'confidence': [r['confidence'] for r in results],
-            'polarisation': [r['polarisation_metrics']['std'] for r in results]
-        })
-        
-        # Calculate daily aggregates
-        daily_sentiment = df.groupby(df['date'].dt.date).agg({
-            'sentiment_score': ['mean', 'std'],
-            'confidence': 'mean',
-            'polarisation': 'mean'
-        }).reset_index()
-        
-        return daily_sentiment

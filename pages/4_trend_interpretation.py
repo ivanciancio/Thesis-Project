@@ -199,39 +199,5 @@ def trend_interpretation_page():
     except Exception as e:
         st.error(f"Error in trend analysis: {str(e)}")
 
-def generate_trend_report(market_trend, sentiment_trend, recommendations):
-    """Generate a detailed trend report with error handling"""
-    try:
-        report = []
-        report.append("FINANCIAL MARKET TREND ANALYSIS REPORT")
-        report.append("=" * 40 + "\n")
-        
-        if market_trend:
-            report.append("MARKET TRENDS")
-            report.append("-" * 20)
-            report.append(f"Direction: {market_trend.get('trend_direction', 'N/A')}")
-            report.append(f"Strength: {market_trend.get('trend_strength', 0):.3f}")
-            report.append(f"Confidence: {market_trend.get('trend_confidence', 0):.1f}%")
-            report.append(f"Volatility: {market_trend.get('volatility', 0):.3f}\n")
-        
-        if sentiment_trend:
-            report.append("SENTIMENT TRENDS")
-            report.append("-" * 20)
-            report.append(f"Direction: {sentiment_trend.get('trend_direction', 'N/A')}")
-            report.append(f"Strength: {sentiment_trend.get('trend_strength', 0):.3f}")
-            report.append(f"Confidence: {sentiment_trend.get('trend_confidence', 0):.1f}%")
-            report.append(f"Volatility: {sentiment_trend.get('volatility', 0):.3f}\n")
-        
-        if recommendations:
-            report.append("RECOMMENDATIONS")
-            report.append("-" * 20)
-            for i, rec in enumerate(recommendations, 1):
-                report.append(f"{i}. {rec}")
-        
-        return "\n".join(report)
-        
-    except Exception as e:
-        return f"Error generating report: {str(e)}"
-
 if __name__ == "__main__":
     trend_interpretation_page()

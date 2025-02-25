@@ -8,48 +8,6 @@ import plotly.graph_objects as go
 import time
 import random
 
-class RateLimiter:
-    def __init__(self):
-        self.last_request = {}
-        self.min_delay = 2  # seconds between requests
-    
-    def wait_if_needed(self, endpoint):
-        """Wait if needed to respect rate limits"""
-        now = time.time()
-        if endpoint in self.last_request:
-            elapsed = now - self.last_request[endpoint]
-            if elapsed < self.min_delay:
-                time.sleep(self.min_delay - elapsed)
-        self.last_request[endpoint] = now
-
-class XDataManager:
-    def __init__(self, client):
-        self.client = client
-        self.rate_limiter = RateLimiter()
-    
-    def get_batch_end_time(self, start_time, end_time):
-        """Calculate appropriate end time for a batch"""
-        max_batch_duration = timedelta(days=7)
-        potential_end = start_time + max_batch_duration
-        return min(potential_end, end_time)
-    
-    def is_rate_limited(self, error):
-        """Check if error is due to rate limiting"""
-        return isinstance(error, tweepy.errors.TooManyRequests)
-    
-    def handle_rate_limit(self, error):
-        """Handle rate limit error"""
-        if hasattr(error, 'response') and error.response is not None:
-            reset_time = error.response.headers.get('x-rate-limit-reset')
-            if reset_time:
-                wait_time = int(reset_time) - int(time.time()) + 1
-                if wait_time > 0:
-                    st.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
-                    time.sleep(wait_time)
-                    return True
-        time.sleep(15)  # Default wait if can't determine reset time
-        return True
-    
 class XAnalyser:
     def __init__(self):
         """Initialise X (Twitter) API client"""
@@ -265,72 +223,6 @@ class XAnalyser:
         except Exception as e:
             self.handle_error('general', str(e))
             return pd.DataFrame()
-
-    def process_batch(self, batch_df: pd.DataFrame, query_stats: dict) -> pd.DataFrame:
-        """Process a batch of tweets with safer engagement calculation"""
-        if batch_df.empty:
-            return pd.DataFrame()
-            
-        try:
-            # Convert dates to consistent format
-            batch_df['Date'] = pd.to_datetime(batch_df['Date']).dt.normalize()
-            
-            # Basic preprocessing with integer operations
-            batch_df['Likes'] = pd.to_numeric(batch_df['Likes'], errors='coerce').fillna(0).astype(int)
-            batch_df['Retweets'] = pd.to_numeric(batch_df['Retweets'], errors='coerce').fillna(0).astype(int)
-            batch_df['Quote_Tweets'] = pd.to_numeric(batch_df['Quote_Tweets'], errors='coerce').fillna(0).astype(int)
-            batch_df['Replies'] = pd.to_numeric(batch_df['Replies'], errors='coerce').fillna(0).astype(int)
-            
-            # Calculate engagement score
-            batch_df['Engagement_Score'] = (
-                batch_df['Likes'] + 
-                (batch_df['Retweets'] * 2) + 
-                (batch_df['Quote_Tweets'] * 2) + 
-                batch_df['Replies']
-            )
-            
-            return batch_df
-            
-        except Exception as e:
-            st.error(f"Error in batch processing: {str(e)}")
-            return batch_df
-
-    def process_twitter_data(self, twitter_data: list, query_stats: dict) -> pd.DataFrame:
-        """Process and structure Twitter data"""
-        if not twitter_data:
-            st.warning("No relevant tweets found")
-            return pd.DataFrame()
-            
-        df = pd.DataFrame(twitter_data)
-        
-        # Basic preprocessing with safe timezone handling
-        df['Date'] = pd.to_datetime(df['Date'])
-        if df['Date'].dt.tz is None:
-            df['Date'] = df['Date'].dt.tz_localize('UTC')
-        df = df.sort_values('Date', ascending=False)
-        
-        # Calculate engagement score
-        df['Engagement_Score'] = (
-            df['Likes'] + 
-            df['Retweets'] * 2 + 
-            df['Quote_Tweets'] * 2 + 
-            df['Replies']
-        )
-        
-        # Remove duplicates based on Tweet_ID
-        df = df.drop_duplicates(subset=['Tweet_ID'])
-        
-        # Display collection statistics
-        st.success(f"""
-        Data Collection Summary:
-        - Total Tweets: {len(df)}
-        - Unique Authors: {df['Author'].nunique()}
-        - Verified Authors: {df['Author_Verified'].sum()}
-        - Total Engagement: {df['Likes'].sum() + df['Retweets'].sum() + df['Quote_Tweets'].sum()}
-        - Queries Used: {len(query_stats)}
-        """)
-        
-        return df
 
     def analyse_content(self, twitter_df: pd.DataFrame, sentiment_analyser) -> pd.DataFrame:
         """Analyse Twitter content with improved metrics and error handling"""

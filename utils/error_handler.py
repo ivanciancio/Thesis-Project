@@ -14,9 +14,3 @@ def handle_api_error(func):
             st.error(error_msg)
             return None
     return wrapper
-
-class APIError(Exception):
-    """Custom exception for API errors"""
-    def __init__(self, message, status_code=None):
-        super().__init__(message)
-        self.status_code = status_code
