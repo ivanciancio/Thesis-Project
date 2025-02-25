@@ -109,18 +109,22 @@ def create_trend_visualisation(market_data, news_sentiment, reddit_sentiment=Non
             )
         )
     
-    # Update layout
+    # Update layout - FIXED VERSION
     fig.update_layout(
         title='Price vs Sentiment Trends',
         xaxis=dict(title='Date'),
         yaxis=dict(
-            title='Price ($)',
-            titlefont=dict(color='blue'),
+            title=dict(
+                text='Price ($)',
+                font=dict(color='blue')
+            ),
             tickfont=dict(color='blue')
         ),
         yaxis2=dict(
-            title='Sentiment Score',
-            titlefont=dict(color='red'),
+            title=dict(
+                text='Sentiment Score',
+                font=dict(color='red')
+            ),
             tickfont=dict(color='red'),
             overlaying='y',
             side='right',
