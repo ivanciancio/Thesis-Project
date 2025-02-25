@@ -123,7 +123,7 @@ def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitte
         return None
 
 def plot_predictions(historical_data, market_predictions, sentiment_predictions, actual_prices=None):
-    """Create visualization comparing prediction types"""
+    """Create visualization comparing prediction types with enhanced visibility"""
     fig = go.Figure()
 
     # Plot historical data
@@ -140,23 +140,27 @@ def plot_predictions(historical_data, market_predictions, sentiment_predictions,
     last_date = historical_data.index[-1]
     prediction_dates = [last_date + timedelta(days=i+1) for i in range(len(market_predictions))]
 
-    # Plot market-only predictions
+    # Plot market-only predictions with enhanced visibility
     fig.add_trace(
         go.Scatter(
             x=prediction_dates,
             y=market_predictions,
             name='Market Prediction',
-            line=dict(color='orange', width=2, dash='dash')
+            mode='lines+markers',  # Added markers for better visibility
+            line=dict(color='orange', width=3),  # Made line thicker
+            marker=dict(size=8, symbol='circle')
         )
     )
 
-    # Plot sentiment-enhanced predictions
+    # Plot sentiment-enhanced predictions with enhanced visibility
     fig.add_trace(
         go.Scatter(
             x=prediction_dates,
             y=sentiment_predictions,
             name='Sentiment-Enhanced',
-            line=dict(color='green', width=2, dash='dash')
+            mode='lines+markers',  # Added markers for better visibility
+            line=dict(color='green', width=3),  # Made line thicker
+            marker=dict(size=8, symbol='diamond')
         )
     )
 
@@ -171,13 +175,21 @@ def plot_predictions(historical_data, market_predictions, sentiment_predictions,
             )
         )
 
+    # Update layout with clearer formatting
     fig.update_layout(
         title="Price Predictions",
         xaxis_title="Date",
         yaxis_title="Price",
         height=600,
         showlegend=True,
-        hovermode='x unified'
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
     )
 
     return fig

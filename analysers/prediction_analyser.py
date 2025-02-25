@@ -207,7 +207,7 @@ class MarketPredictionAnalyser:
             return False
 
     def train_sentiment_model(self, market_data, news_data):
-        """Train sentiment-enhanced model"""
+        """Train sentiment-enhanced model with a direct approach to column handling"""
         try:
             # Create copies to avoid modifying originals
             market_copy = market_data.copy()
@@ -222,10 +222,9 @@ class MarketPredictionAnalyser:
             
             # Handle case where sentiment column is not found
             if sentiment_col is None:
-                st.warning("Sentiment column not found. Using default values.")
                 sentiment_col = 'Sentiment Score'
                 news_copy[sentiment_col] = 0
-                    
+                        
             # Ensure datetime format
             market_copy['Date'] = pd.to_datetime(market_copy['Date'])
             news_copy['Date'] = pd.to_datetime(news_copy['Date'])
@@ -234,20 +233,43 @@ class MarketPredictionAnalyser:
             market_copy['DateOnly'] = market_copy['Date'].dt.date
             news_copy['DateOnly'] = news_copy['Date'].dt.date
             
-            # Calculate daily sentiment with explicit naming
-            daily_sentiment = news_copy.groupby('DateOnly')[sentiment_col].mean().reset_index()
-            daily_sentiment.rename(columns={sentiment_col: 'News_Sentiment'}, inplace=True)
+            # DIRECT APPROACH: Skip the merge entirely
+            # First, create a complete set of dates from the market data
+            all_dates = pd.DataFrame({'DateOnly': market_copy['DateOnly'].unique()})
             
-            # Merge data
-            combined = pd.merge(market_copy, daily_sentiment, on='DateOnly', how='left')
-            
-            # Check if News_Sentiment exists after merge
-            if 'News_Sentiment' not in combined.columns:
-                st.warning("News_Sentiment column not found after merge. Creating it manually.")
-                combined['News_Sentiment'] = 0
+            # Second, calculate daily sentiment and join with all dates
+            if len(news_copy) > 0:
+                daily_news = news_copy.groupby('DateOnly')[sentiment_col].mean().reset_index()
+                daily_news.columns = ['DateOnly', 'News_Sentiment']
+                
+                # Join with complete date set to fill in any missing dates
+                sentiment_for_all_dates = pd.merge(
+                    all_dates, 
+                    daily_news, 
+                    on='DateOnly', 
+                    how='left'
+                )
             else:
-                # Fill missing values
-                combined['News_Sentiment'] = combined['News_Sentiment'].fillna(0)
+                # If no news data, create empty sentiment column
+                sentiment_for_all_dates = all_dates.copy()
+                sentiment_for_all_dates['News_Sentiment'] = 0
+                
+            # Fill missing sentiment values with 0
+            sentiment_for_all_dates['News_Sentiment'] = sentiment_for_all_dates['News_Sentiment'].fillna(0)
+                
+            # Now join sentiment data to the market data
+            # This guarantees the News_Sentiment column will exist
+            combined = pd.merge(
+                market_copy,
+                sentiment_for_all_dates,
+                on='DateOnly',
+                how='left'
+            )
+            
+            # Final safety check
+            if 'News_Sentiment' not in combined.columns:
+                # This should never happen with our approach, but just in case
+                combined['News_Sentiment'] = 0
             
             # Prepare features - use core features and News_Sentiment
             features = ['Open', 'High', 'Low', 'Close', 'Volume', 'News_Sentiment']
@@ -274,7 +296,7 @@ class MarketPredictionAnalyser:
                             if feature in combined.columns:
                                 row_features.append(combined.iloc[i + j][feature])
                             else:
-                                # Use 0 as default if feature is missing
+                                # This should never happen now, but just in case
                                 row_features.append(0)
                         sequence.extend(row_features)
                     
