@@ -1,12 +1,66 @@
+import warnings
+import os
+import sys
+from pathlib import Path
+import logging
+
+# Get the absolute path of the project root directory and add it to Python path
+current_file = Path(__file__).resolve()
+project_root = current_file.parent.parent  # Go up one level from the 'pages' directory
+sys.path.insert(0, str(project_root))
+
+# Now import from utils will work
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from utils.api_helpers import fetch_news_data
+from utils.api_helpers import fetch_news_data  # Remove fetch_news_data_fixed
 from analysers.sentiment_analyser import FinancialSentimentAnalyser
 from analysers.reddit_analyser import RedditAnalyser
 from analysers.x_analyser import XAnalyser
+from utils.visualisation import plot_model_comparison, plot_model_correlation_matrix
 from datetime import datetime, timedelta
 import logging
+import numpy as np
+
+def check_sentiment_analyser_function():
+    """Function to test if sentiment_analyser correctly returns model-specific results"""
+    try:
+        # Import the sentiment analyser
+        from analysers.sentiment_analyser import FinancialSentimentAnalyser
+        
+        # Initialize the analyser
+        sentiment_analyser = FinancialSentimentAnalyser()
+        
+        # Show available models
+        st.write("Active models:", sentiment_analyser.models)
+        st.write("Model weights:", sentiment_analyser.model_weights)
+        
+        # Test with a sample text
+        sample_text = "This is a test text for sentiment analysis. Apple stock is performing well."
+        
+        # Test without return_all_models
+        normal_result = sentiment_analyser.analyse_sentiment(sample_text)
+        st.write("Normal result keys:", normal_result.keys())
+        
+        # Test with return_all_models=True
+        model_result = sentiment_analyser.analyse_sentiment(sample_text, return_all_models=True)
+        st.write("Model result keys:", model_result.keys())
+        
+        # Check if individual_models exists
+        if 'individual_models' in model_result:
+            st.success("✅ Individual models data is correctly returned!")
+            st.write("Available models:", list(model_result['individual_models'].keys()))
+            
+            # Show sample of model data
+            for model, data in model_result['individual_models'].items():
+                st.write(f"{model}: {data}")
+        else:
+            st.error("❌ No individual_models key in the result. The analyse_sentiment function may not be implementing return_all_models correctly.")
+            st.write("Full result:", model_result)
+    
+    except Exception as e:
+        st.error(f"Error testing sentiment analyser: {str(e)}")
+        st.exception(e)
 
 class TorchClassesFilter(logging.Filter):
     """Filter out annoying torch.classes warnings"""
@@ -25,6 +79,62 @@ stderr_handler = logging.StreamHandler()
 stderr_handler.addFilter(TorchClassesFilter())
 root_logger.addHandler(stderr_handler)
 
+def display_model_info(sentiment_analyser):
+    """Display information about active sentiment models and their weights without using charts"""
+    st.sidebar.header("🧠 Sentiment Models")
+    
+    # Show active models and weights
+    models_info = {
+        'textblob': {'name': 'TextBlob', 'color': '#3498db', 'active': sentiment_analyser.models.get('textblob', False)},
+        'vader': {'name': 'VADER', 'color': '#2ecc71', 'active': sentiment_analyser.models.get('vader', False)},
+        'finbert': {'name': 'FinBERT', 'color': '#e74c3c', 'active': sentiment_analyser.models.get('finbert', False)}
+    }
+    
+    # Display active models
+    st.sidebar.subheader("Active Models")
+    active_models = []
+    for model_id, info in models_info.items():
+        if info['active']:
+            active_models.append(f"✅ {info['name']}")
+        else:
+            active_models.append(f"❌ {info['name']}")
+    
+    st.sidebar.write('\n'.join(active_models))
+    
+    # Display model weights as text instead of chart
+    st.sidebar.subheader("Model Weights")
+    weights = sentiment_analyser.model_weights
+    
+    # Display weights as simple text
+    for model_id, info in models_info.items():
+        if info['active']:
+            weight_pct = weights.get(model_id, 0) * 100
+            st.sidebar.text(f"{info['name']}: {weight_pct:.1f}%")
+    
+    # Add custom weight adjustment
+    st.sidebar.subheader("Adjust Weights")
+    custom_weights = {}
+    
+    for model_id, info in models_info.items():
+        if info['active']:
+            custom_weights[model_id] = st.sidebar.slider(
+                f"{info['name']} Weight",
+                min_value=0.0,
+                max_value=1.0,
+                value=weights.get(model_id, 0.0),
+                step=0.1
+            )
+    
+    if st.sidebar.button("Apply Custom Weights"):
+        # Normalize weights
+        total = sum(custom_weights.values())
+        if total > 0:
+            for model in custom_weights:
+                sentiment_analyser.model_weights[model] = custom_weights[model] / total
+            st.sidebar.success("✅ Custom weights applied!")
+            # Force re-normalization of weights
+            sentiment_analyser._normalise_weights()
+
 def plot_daily_sentiment(news_df):
     """Create daily sentiment visualisation"""
     # Ensure date column is datetime and strip timezone
@@ -34,10 +144,11 @@ def plot_daily_sentiment(news_df):
     news_df['Hour'] = news_df['Date'].dt.hour
     
     # Group by date and hour for more granular view
+    # NOTE: Using the correct column name with space, not underscore
     hourly_sentiment = (news_df
         .groupby([news_df['Date'].dt.date, 'Hour'])
         .agg({
-            'Sentiment Score': 'mean',
+            'Sentiment Score': 'mean',  # This matches the actual column name
             'Title': 'count'
         })
         .reset_index()
@@ -56,7 +167,7 @@ def plot_daily_sentiment(news_df):
     fig.add_trace(
         go.Scatter(
             x=hourly_sentiment['DateTime'],
-            y=hourly_sentiment['Sentiment Score'],
+            y=hourly_sentiment['Sentiment Score'],  # Correct column name here too
             mode='lines+markers',
             name='News Sentiment',
             line=dict(color='blue', width=2),
@@ -126,14 +237,14 @@ def plot_sentiment_comparison(news_data, reddit_data=None):
     # Add news sentiment
     if news_data is not None and not news_data.empty:
         daily_news = news_data.groupby(news_data['Date'].dt.date).agg({
-            'Sentiment Score': 'mean',
+            'Sentiment_Score': 'mean',
             'Title': 'count'
         }).reset_index()
         
         fig.add_trace(
             go.Scatter(
                 x=daily_news['Date'],
-                y=daily_news['Sentiment Score'],
+                y=daily_news['Sentiment_Score'],
                 mode='lines+markers',
                 name='News Sentiment',
                 line=dict(color='blue')
@@ -143,14 +254,14 @@ def plot_sentiment_comparison(news_data, reddit_data=None):
     # Add Reddit sentiment if available
     if reddit_data is not None and not reddit_data.empty:
         daily_reddit = reddit_data.groupby(reddit_data['Date'].dt.date).agg({
-            'Sentiment Score': 'mean',
+            'Sentiment_Score': 'mean',
             'Text': 'count'
         }).reset_index()
         
         fig.add_trace(
             go.Scatter(
                 x=daily_reddit['Date'],
-                y=daily_reddit['Sentiment Score'],
+                y=daily_reddit['Sentiment_Score'],
                 mode='lines+markers',
                 name='Reddit Sentiment',
                 line=dict(color='orange')
@@ -181,6 +292,9 @@ def plot_sentiment_comparison(news_data, reddit_data=None):
 def news_analysis_tab():
     st.header("EODHD News Analysis")
     
+    # Add tabs for different analysis views
+    news_tabs = st.tabs(["Ensemble Analysis", "Model Comparison", "Raw Data"])
+    
     if st.button("Fetch News Data"):
         with st.spinner("Fetching news data..."):
             try:
@@ -198,68 +312,157 @@ def news_analysis_tab():
                 )
                 
                 if news_data is not None and not news_data.empty:
+                    # Initialize sentiment analyzer
                     sentiment_analyser = FinancialSentimentAnalyser()
                     
-                    # Process each news item
+                    # Process each news item with all models
                     analysed_news = []
                     for _, row in news_data.iterrows():
                         text = f"{row['Title']} {row.get('Text', '')}"
-                        sentiment_result = sentiment_analyser.analyse_sentiment(text)
-                        analysed_news.append(sentiment_result)
+                        # Get results from all models
+                        sentiment_result = sentiment_analyser.analyse_sentiment(text, return_all_models=True)
+                        
+                        # Create base result
+                        news_item = {
+                            'Date': row['Date'],
+                            'Title': row['Title'],
+                            'Sentiment Score': sentiment_result['score'],  # Space, not underscore
+                            'Sentiment': sentiment_result['sentiment'],
+                            'Confidence': sentiment_result['confidence']
+                        }
+                        
+                        # Add individual model scores if available
+                        if 'individual_models' in sentiment_result:
+                            for model, model_result in sentiment_result['individual_models'].items():
+                                news_item[f'{model}_score'] = model_result['score']
+                                news_item[f'{model}_sentiment'] = model_result['sentiment']
+                                news_item[f'{model}_confidence'] = model_result['confidence']
+                        
+                        analysed_news.append(news_item)
                     
                     # Create DataFrame with analysis results
-                    news_df = pd.DataFrame({
-                        'Date': news_data['Date'],
-                        'Title': news_data['Title'],
-                        'Sentiment Score': [result['score'] for result in analysed_news],
-                        'Sentiment': [result['sentiment'] for result in analysed_news]
-                    })
+                    news_df = pd.DataFrame(analysed_news)
                     
                     news_df['Date'] = pd.to_datetime(news_df['Date']).dt.tz_localize(None)
                     st.session_state.news_data = news_df
                     
-                    # Display news sentiment analysis
-                    st.subheader("News Sentiment Analysis")
+                    # Store available models
+                    available_models = []
+                    for model in ['textblob', 'vader', 'finbert']:
+                        if f'{model}_score' in news_df.columns:
+                            available_models.append(model)
+                    st.session_state.available_models = available_models
                     
-                    # Show summary metrics
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Average Sentiment", f"{news_df['Sentiment Score'].mean():.2f}")
-                    with col2:
-                        st.metric("Positive Articles", len(news_df[news_df['Sentiment'] == 'Positive']))
-                    with col3:
-                        st.metric("Negative Articles", len(news_df[news_df['Sentiment'] == 'Negative']))
+                    # ENSEMBLE ANALYSIS TAB
+                    with news_tabs[0]:
+                        st.subheader("Ensemble Sentiment Analysis")
+                        
+                        # Show summary metrics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Average Sentiment", f"{news_df['Sentiment Score'].mean():.2f}")
+                        with col2:
+                            st.metric("Positive Articles", len(news_df[news_df['Sentiment'] == 'Positive']))
+                        with col3:
+                            st.metric("Negative Articles", len(news_df[news_df['Sentiment'] == 'Negative']))
+                        
+                        # Display sentiment trend
+                        st.subheader("Sentiment Trend")
+                        fig = plot_daily_sentiment(news_df)
+                        st.plotly_chart(fig, use_container_width=True)
                     
-                    # Display sentiment trend
-                    st.subheader("Sentiment Trend")
-                    fig = plot_daily_sentiment(news_df)
-                    st.plotly_chart(fig, use_container_width=True)
+                    # MODEL COMPARISON TAB
+                    with news_tabs[1]:
+                        st.subheader("Model Comparison")
+                        
+                        # Check if we have model-specific scores
+                        if len(available_models) > 0:
+                            # Show metrics for each model
+                            model_metrics = []
+                            for model in available_models:
+                                metrics = {
+                                    'Model': model.capitalize(),
+                                    'Average Score': news_df[f'{model}_score'].mean(),
+                                    'Std Dev': news_df[f'{model}_score'].std(),
+                                    'Positive %': len(news_df[news_df[f'{model}_sentiment'] == 'Positive']) / len(news_df) * 100,
+                                    'Negative %': len(news_df[news_df[f'{model}_sentiment'] == 'Negative']) / len(news_df) * 100,
+                                    'Neutral %': len(news_df[news_df[f'{model}_sentiment'] == 'Neutral']) / len(news_df) * 100
+                                }
+                                model_metrics.append(metrics)
+                            
+                            # Add ensemble metrics
+                            model_metrics.append({
+                                'Model': 'Ensemble',
+                                'Average Score': news_df['Sentiment Score'].mean(),
+                                'Std Dev': news_df['Sentiment Score'].std(),
+                                'Positive %': len(news_df[news_df['Sentiment'] == 'Positive']) / len(news_df) * 100,
+                                'Negative %': len(news_df[news_df['Sentiment'] == 'Negative']) / len(news_df) * 100,
+                                'Neutral %': len(news_df[news_df['Sentiment'] == 'Neutral']) / len(news_df) * 100
+                            })
+                            
+                            # Display metrics table
+                            metrics_df = pd.DataFrame(model_metrics)
+                            metrics_df = metrics_df.set_index('Model')
+                            st.dataframe(metrics_df.style.format({
+                                'Average Score': '{:.3f}',
+                                'Std Dev': '{:.3f}',
+                                'Positive %': '{:.1f}%',
+                                'Negative %': '{:.1f}%',
+                                'Neutral %': '{:.1f}%'
+                            }))
+                            
+                            # If plot_model_comparison function is available
+                            try:
+                                # Display model comparison plot
+                                st.subheader("Model Score Comparison")
+                                comp_fig = plot_model_comparison(news_df, available_models)
+                                st.plotly_chart(comp_fig, use_container_width=True)
+                                
+                                # Display correlation matrix
+                                st.subheader("Model Correlation Matrix")
+                                corr_fig = plot_model_correlation_matrix(news_df, available_models)
+                                st.plotly_chart(corr_fig)
+                            except Exception as e:
+                                st.warning(f"Could not generate model comparison plots: {str(e)}")
+                        else:
+                            st.warning("No model-specific data available for comparison.")
                     
-                    # Display the news data table
-                    st.subheader("News Articles")
-                    display_df = news_df[['Date', 'Title', 'Sentiment', 'Sentiment Score']].copy()
-                    display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-                    st.dataframe(
-                        display_df.sort_values('Date', ascending=False),
-                        use_container_width=True
-                    )
-                    
-                    # Add download button
-                    st.download_button(
-                        "Download News Analysis Data",
-                        news_df.to_csv(index=False),
-                        "news_analysis.csv",
-                        "text/csv",
-                        key='download-news-data'
-                    )
+                    # RAW DATA TAB
+                    with news_tabs[2]:
+                        st.subheader("News Articles")
+                        display_df = news_df[['Date', 'Title', 'Sentiment', 'Sentiment Score']].copy()
+                        
+                        # Add model columns if available
+                        if available_models and st.checkbox("Show Individual Model Scores"):
+                            for model in available_models:
+                                display_df[f"{model.capitalize()} Score"] = news_df[f"{model}_score"]
+                        
+                        display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                        st.dataframe(
+                            display_df.sort_values('Date', ascending=False),
+                            use_container_width=True
+                        )
+                        
+                        # Add download button
+                        st.download_button(
+                            "Download News Analysis Data",
+                            news_df.to_csv(index=False),
+                            "news_analysis.csv",
+                            "text/csv",
+                            key='download-news-data'
+                        )
                 else:
                     st.error(f"No news data found for {st.session_state.symbol} in the market data period")
                     
             except Exception as e:
                 st.error(f"Error fetching news data: {str(e)}")
+                st.exception(e)  # Show full exception for debugging
 
 def x_analysis_tab():
     st.header("X (Twitter) Analysis")
+    
+    # Add tabs for different analysis views
+    x_tabs = st.tabs(["Ensemble Analysis", "Model Comparison", "Raw Data"])
     
     if st.button("Fetch X Data"):
         with st.spinner("Fetching X data..."):
@@ -281,119 +484,265 @@ def x_analysis_tab():
                 )
                 
                 if twitter_data is not None and not twitter_data.empty:
+                    # Initialize sentiment analyzer
                     sentiment_analyser = FinancialSentimentAnalyser()
+                    
+                    # Display model information in sidebar
+                    display_model_info(sentiment_analyser)
+                    
+                    # Analyze content
                     analysed_data = x_analyser.analyse_content(twitter_data, sentiment_analyser)
                     
                     if not analysed_data.empty:
                         # Save hourly aggregated data for visualization
                         st.session_state.twitter_data = analysed_data
                         
-                        # Make raw tweet data available for correlation analysis (if created by analyse_content)
-                        if 'twitter_raw_data' in st.session_state and not st.session_state.twitter_raw_data.empty:
-                            st.success("✅ Raw tweet data also saved for correlation analysis")
+                        # Make raw tweet data available for correlation analysis
+                        raw_twitter_available = 'twitter_raw_data' in st.session_state and not st.session_state.twitter_raw_data.empty
                         
-                        st.write("Twitter Data Summary:")
-                        st.write("- Shape:", analysed_data.shape)
-                        st.write("- Date range:", analysed_data['Date'].min(), "to", analysed_data['Date'].max())
+                        # ENSEMBLE ANALYSIS TAB
+                        with x_tabs[0]:
+                            st.subheader("X Sentiment Analysis")
+                            
+                            # Calculate sentiment metrics
+                            avg_sentiment = analysed_data['Sentiment_Score'].mean()
+                            total_tweets = analysed_data['Tweet_Count'].sum()
+                            
+                            # Show summary metrics
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(
+                                    "Average Sentiment",
+                                    f"{avg_sentiment:.2f}"
+                                )
+                                st.metric(
+                                    "Total Tweets",
+                                    total_tweets
+                                )
+                            
+                            with col2:
+                                st.metric(
+                                    "Average Daily Tweets",
+                                    f"{total_tweets / len(analysed_data):.1f}"
+                                )
+                                st.metric(
+                                    "Days Analyzed",
+                                    len(analysed_data)
+                                )
+                            
+                            with col3:
+                                st.metric(
+                                    "Average Engagement",
+                                    f"{analysed_data['Engagement_Mean'].mean():.1f}"
+                                )
+                                st.metric(
+                                    "Total Engagement",
+                                    int(analysed_data['Engagement_Total'].sum())
+                                )
+                            
+                            # Display sentiment trend
+                            st.subheader("Sentiment Trend")
+                            fig = x_analyser.plot_sentiment_trend(analysed_data)
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            # Display engagement analysis
+                            st.subheader("Engagement Analysis")
+                            
+                            # Create engagement metrics
+                            eng_col1, eng_col2 = st.columns(2)
+                            
+                            with eng_col1:
+                                engagement_corr = analysed_data['Sentiment_Score'].corr(
+                                    analysed_data['Engagement_Mean']
+                                )
+                                st.metric(
+                                    "Sentiment-Engagement Correlation",
+                                    f"{engagement_corr:.2f}"
+                                )
+                            
+                            with eng_col2:
+                                st.write("Daily Statistics:")
+                                daily_stats = analysed_data[[
+                                    'Sentiment_Score',
+                                    'Engagement_Mean',
+                                    'Tweet_Count'
+                                ]].describe()
+                                st.dataframe(daily_stats)
                         
-                        # Display X sentiment analysis
-                        st.subheader("X Sentiment Analysis")
+                        # MODEL COMPARISON TAB
+                        with x_tabs[1]:
+                            st.subheader("Model Comparison")
+                            
+                            if raw_twitter_available:
+                                raw_tweets = st.session_state.twitter_raw_data
+                                
+                                # Check for available models
+                                available_models = []
+                                for model in ['textblob', 'vader', 'finbert']:
+                                    if f'{model}_score' in raw_tweets.columns:
+                                        available_models.append(model)
+                                
+                                if available_models:
+                                    # Show metrics for each model
+                                    model_metrics = []
+                                    for model in available_models:
+                                        metrics = {
+                                            'Model': model.capitalize(),
+                                            'Average Score': raw_tweets[f'{model}_score'].mean(),
+                                            'Std Dev': raw_tweets[f'{model}_score'].std(),
+                                            'Positive %': len(raw_tweets[raw_tweets[f'{model}_sentiment'] == 'Positive']) / len(raw_tweets) * 100,
+                                            'Negative %': len(raw_tweets[raw_tweets[f'{model}_sentiment'] == 'Negative']) / len(raw_tweets) * 100,
+                                            'Neutral %': len(raw_tweets[raw_tweets[f'{model}_sentiment'] == 'Neutral']) / len(raw_tweets) * 100
+                                        }
+                                        model_metrics.append(metrics)
+                                    
+                                    # Add ensemble metrics
+                                    model_metrics.append({
+                                        'Model': 'Ensemble',
+                                        'Average Score': raw_tweets['Sentiment_Score'].mean(),
+                                        'Std Dev': raw_tweets['Sentiment_Score'].std(),
+                                        'Positive %': len(raw_tweets[raw_tweets['Sentiment'] == 'Positive']) / len(raw_tweets) * 100,
+                                        'Negative %': len(raw_tweets[raw_tweets['Sentiment'] == 'Negative']) / len(raw_tweets) * 100,
+                                        'Neutral %': len(raw_tweets[raw_tweets['Sentiment'] == 'Neutral']) / len(raw_tweets) * 100
+                                    })
+                                    
+                                    # Display metrics table
+                                    metrics_df = pd.DataFrame(model_metrics)
+                                    metrics_df = metrics_df.set_index('Model')
+                                    st.dataframe(metrics_df.style.format({
+                                        'Average Score': '{:.3f}',
+                                        'Std Dev': '{:.3f}',
+                                        'Positive %': '{:.1f}%',
+                                        'Negative %': '{:.1f}%',
+                                        'Neutral %': '{:.1f}%'
+                                    }))
+                                    
+                                    # Create model comparison visualization
+                                    try:
+                                        st.subheader("Model Score Comparison")
+                                        # Create a simple line chart for each model's average daily sentiment
+                                        model_data = {}
+                                        
+                                        # Add date column for x-axis
+                                        model_data['Date'] = raw_tweets['Date'].dt.date
+                                        
+                                        # Add each model's score
+                                        for model in available_models:
+                                            model_data[model.capitalize()] = raw_tweets[f'{model}_score']
+                                        
+                                        # Add ensemble score
+                                        model_data['Ensemble'] = raw_tweets['Sentiment_Score']
+                                        
+                                        # Convert to DataFrame
+                                        model_df = pd.DataFrame(model_data)
+                                        
+                                        # Group by date and calculate mean
+                                        daily_model_df = model_df.groupby('Date').mean().reset_index()
+                                        
+                                        # Create line chart using Plotly
+                                        fig = go.Figure()
+                                        
+                                        for model in available_models:
+                                            fig.add_trace(go.Scatter(
+                                                x=daily_model_df['Date'],
+                                                y=daily_model_df[model.capitalize()],
+                                                mode='lines',
+                                                name=model.capitalize()
+                                            ))
+                                        
+                                        fig.add_trace(go.Scatter(
+                                            x=daily_model_df['Date'],
+                                            y=daily_model_df['Ensemble'],
+                                            mode='lines',
+                                            name='Ensemble',
+                                            line=dict(width=3, dash='dash')
+                                        ))
+                                        
+                                        fig.update_layout(
+                                            title="Model Sentiment Comparison",
+                                            xaxis_title="Date",
+                                            yaxis_title="Sentiment Score",
+                                            yaxis=dict(range=[-1, 1]),
+                                            legend=dict(
+                                                orientation="h",
+                                                yanchor="bottom",
+                                                y=1.02,
+                                                xanchor="right",
+                                                x=1
+                                            )
+                                        )
+                                        
+                                        st.plotly_chart(fig, use_container_width=True)
+                                    except Exception as e:
+                                        st.warning(f"Could not create visualization: {e}")
+                                        
+                                else:
+                                    st.warning("No model-specific data available for comparison.")
+                            else:
+                                st.warning("No raw tweet data available for model comparison.")
                         
-                        # Calculate sentiment metrics
-                        avg_sentiment = analysed_data['Sentiment_Score'].mean()
-                        total_tweets = analysed_data['Tweet_Count'].sum()
-                        
-                        # Show summary metrics
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric(
-                                "Average Sentiment",
-                                f"{avg_sentiment:.2f}"
-                            )
-                            st.metric(
-                                "Total Tweets",
-                                total_tweets
-                            )
-                        
-                        with col2:
-                            st.metric(
-                                "Average Daily Tweets",
-                                f"{total_tweets / len(analysed_data):.1f}"
-                            )
-                            st.metric(
-                                "Days Analyzed",
-                                len(analysed_data)
-                            )
-                        
-                        with col3:
-                            st.metric(
-                                "Average Engagement",
-                                f"{analysed_data['Engagement_Mean'].mean():.1f}"
-                            )
-                            st.metric(
-                                "Total Engagement",
-                                int(analysed_data['Engagement_Total'].sum())
-                            )
-                        
-                        # Display sentiment trend
-                        st.subheader("Sentiment Trend")
-                        fig = x_analyser.plot_sentiment_trend(analysed_data)
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Display engagement analysis
-                        st.subheader("Engagement Analysis")
-                        
-                        # Create engagement metrics
-                        eng_col1, eng_col2 = st.columns(2)
-                        
-                        with eng_col1:
-                            # Calculate correlation between sentiment and engagement
-                            engagement_corr = analysed_data['Sentiment_Score'].corr(
-                                analysed_data['Engagement_Mean']
-                            )
-                            st.metric(
-                                "Sentiment-Engagement Correlation",
-                                f"{engagement_corr:.2f}"
-                            )
-                        
-                        with eng_col2:
-                            # Daily statistics
-                            st.write("Daily Statistics:")
-                            daily_stats = analysed_data[[
-                                'Sentiment_Score',
-                                'Engagement_Mean',
-                                'Tweet_Count'
-                            ]].describe()
-                            st.dataframe(daily_stats)
-                        
-                        # Display the daily aggregated data
-                        st.subheader("Daily Twitter Activity")
-                        display_df = analysed_data.copy()
-                        display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d')
-                        
-                        # Select and reorder columns for display
-                        display_columns = [
-                            'Date',
-                            'Tweet_Count',
-                            'Sentiment_Score',
-                            'Sentiment_Std',
-                            'Engagement_Mean',
-                            'Engagement_Total'
-                        ]
-                        
-                        st.dataframe(
-                            display_df[display_columns].sort_values('Date', ascending=False),
-                            use_container_width=True
-                        )
-                        
-                        # Add download button
-                        st.download_button(
-                            "Download X Analysis Data",
-                            display_df.to_csv(index=False),
-                            "x_analysis.csv",
-                            "text/csv",
-                            key='download-x-data'
-                        )
+                        # RAW DATA TAB
+                        with x_tabs[2]:
+                            st.subheader("X (Twitter) Data")
+                            
+                            if raw_twitter_available:
+                                raw_tweets = st.session_state.twitter_raw_data
+                                
+                                # Create display DataFrame
+                                display_df = raw_tweets[['Date', 'Text', 'Sentiment', 'Sentiment_Score', 'Author', 'Likes', 'Retweets']].copy()
+                                
+                                # Add model columns if available
+                                available_models = []
+                                for model in ['textblob', 'vader', 'finbert']:
+                                    if f'{model}_score' in raw_tweets.columns:
+                                        available_models.append(model)
+                                
+                                if available_models and st.checkbox("Show Individual Model Scores", key="twitter_models"):
+                                    for model in available_models:
+                                        display_df[f"{model.capitalize()} Score"] = raw_tweets[f"{model}_score"]
+                                
+                                display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                                st.dataframe(
+                                    display_df.sort_values('Date', ascending=False),
+                                    use_container_width=True
+                                )
+                                
+                                # Add download button
+                                st.download_button(
+                                    "Download X Analysis Data",
+                                    raw_tweets.to_csv(index=False),
+                                    "twitter_analysis.csv",
+                                    "text/csv",
+                                    key='download-twitter-data'
+                                )
+                            else:
+                                # Show daily aggregated data instead
+                                display_df = analysed_data.copy()
+                                display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                                
+                                # Select and reorder columns for display
+                                display_columns = [
+                                    'Date',
+                                    'Tweet_Count',
+                                    'Sentiment_Score',
+                                    'Sentiment_Std',
+                                    'Engagement_Mean',
+                                    'Engagement_Total'
+                                ]
+                                
+                                st.dataframe(
+                                    display_df[display_columns].sort_values('Date', ascending=False),
+                                    use_container_width=True
+                                )
+                                
+                                # Add download button
+                                st.download_button(
+                                    "Download X Analysis Data",
+                                    display_df.to_csv(index=False),
+                                    "x_analysis.csv",
+                                    "text/csv",
+                                    key='download-x-data'
+                                )
                     else:
                         st.warning("Could not analyse X content")
                 else:
@@ -406,9 +755,13 @@ def x_analysis_tab():
 def reddit_analysis_tab():
     st.header("Reddit Analysis")
     
+    # Add tabs for different analysis views
+    reddit_tabs = st.tabs(["Ensemble Analysis", "Model Comparison", "Raw Data"])
+    
     if st.button("Fetch Reddit Data"):
         with st.spinner("Fetching Reddit data..."):
             try:
+                # Initialize Reddit analyser
                 reddit_analyser = RedditAnalyser()
                 
                 # Get market data date range
@@ -423,155 +776,228 @@ def reddit_analysis_tab():
                 )
                 
                 if reddit_data is not None and not reddit_data.empty:
-                    # Analyse sentiment
+                    # Initialize sentiment analyzer
                     sentiment_analyser = FinancialSentimentAnalyser()
+                    
+                    # Display model information in sidebar
+                    display_model_info(sentiment_analyser)
+                    
+                    # Analyse sentiment
                     analysed_data = reddit_analyser.analyse_content(reddit_data, sentiment_analyser)
                     
                     if not analysed_data.empty:
                         st.session_state.reddit_data = analysed_data
                         
-                        # Show summary metrics
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric(
-                                "Total Posts",
-                                len(analysed_data[analysed_data['Type'] == 'post'])
+                        # ENSEMBLE ANALYSIS TAB
+                        with reddit_tabs[0]:
+                            # Show summary metrics
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(
+                                    "Total Posts",
+                                    len(analysed_data[analysed_data['Type'] == 'post'])
+                                )
+                                st.metric(
+                                    "Total Comments",
+                                    len(analysed_data[analysed_data['Type'] == 'comment'])
+                                )
+                            
+                            with col2:
+                                avg_sentiment = analysed_data['Sentiment_Score'].mean()
+                                st.metric(
+                                    "Average Sentiment",
+                                    f"{avg_sentiment:.2f}"
+                                )
+                                st.metric(
+                                    "Positive Posts/Comments",
+                                    len(analysed_data[analysed_data['Sentiment'] == 'Positive'])
+                                )
+                            
+                            with col3:
+                                st.metric(
+                                    "Total Score",
+                                    analysed_data['Score'].sum()
+                                )
+                                st.metric(
+                                    "Negative Posts/Comments",
+                                    len(analysed_data[analysed_data['Sentiment'] == 'Negative'])
+                                )
+                            
+                            # Display sentiment distribution
+                            st.subheader("Reddit Sentiment Distribution")
+                            
+                            # Create sentiment distribution plot
+                            fig = go.Figure()
+                            
+                            # Add sentiment score distribution
+                            fig.add_trace(go.Box(
+                                y=analysed_data['Sentiment_Score'],
+                                name='Sentiment Distribution',
+                                boxpoints='all',
+                                jitter=0.3,
+                                pointpos=-1.8
+                            ))
+                            
+                            fig.update_layout(
+                                title="Sentiment Score Distribution",
+                                yaxis_title="Sentiment Score",
+                                height=400,
+                                showlegend=False,
+                                yaxis=dict(
+                                    range=[-1, 1],
+                                    zeroline=True,
+                                    zerolinecolor='rgba(128,128,128,0.4)'
+                                )
                             )
-                            st.metric(
-                                "Total Comments",
-                                len(analysed_data[analysed_data['Type'] == 'comment'])
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            # Display sentiment trend
+                            st.subheader("Reddit Sentiment Trend")
+                            
+                            # Calculate daily sentiment
+                            daily_sentiment = (analysed_data
+                                .assign(Date=analysed_data['Date'].dt.date)
+                                .groupby('Date')
+                                .agg({
+                                    'Sentiment_Score': 'mean',
+                                    'Type': 'count'
+                                })
+                                .reset_index())
+                            
+                            # Create trend plot
+                            fig = go.Figure()
+                            
+                            # Add sentiment line
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=daily_sentiment['Date'],
+                                    y=daily_sentiment['Sentiment_Score'],
+                                    mode='lines+markers',
+                                    name='Reddit Sentiment',
+                                    line=dict(color='orange', width=2),
+                                    marker=dict(size=6)
+                                )
                             )
-                        
-                        with col2:
-                            avg_sentiment = analysed_data['Sentiment_Score'].mean()  # Changed from 'Sentiment Score'
-                            st.metric(
-                                "Average Sentiment",
-                                f"{avg_sentiment:.2f}"
+                            
+                            # Add post/comment count bars
+                            fig.add_trace(
+                                go.Bar(
+                                    x=daily_sentiment['Date'],
+                                    y=daily_sentiment['Type'],
+                                    name='Number of Posts/Comments',
+                                    yaxis='y2',
+                                    marker_color='rgba(255,165,0,0.2)'
+                                )
                             )
-                            st.metric(
-                                "Positive Posts/Comments",
-                                len(analysed_data[analysed_data['Sentiment'] == 'Positive'])
+                            
+                            fig.update_layout(
+                                title="Reddit Sentiment Over Time",
+                                xaxis_title="Date",
+                                yaxis=dict(
+                                    title="Sentiment Score",
+                                    range=[-1, 1],
+                                    gridcolor='rgba(128,128,128,0.2)',
+                                    zeroline=True,
+                                    zerolinecolor='rgba(128,128,128,0.4)'
+                                ),
+                                yaxis2=dict(
+                                    title="Number of Posts/Comments",
+                                    overlaying='y',
+                                    side='right',
+                                    showgrid=False
+                                ),
+                                height=400,
+                                showlegend=True,
+                                hovermode='x unified',
+                                plot_bgcolor='white'
                             )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
                         
-                        with col3:
-                            st.metric(
-                                "Total Score",
-                                analysed_data['Score'].sum()
+                        # MODEL COMPARISON TAB
+                        with reddit_tabs[1]:
+                            st.subheader("Model Comparison")
+                            
+                            # Store available models
+                            available_models = []
+                            for model in ['textblob', 'vader', 'finbert']:
+                                if f'{model}_score' in analysed_data.columns:
+                                    available_models.append(model)
+                            
+                            if available_models:
+                                # Show metrics for each model
+                                model_metrics = []
+                                for model in available_models:
+                                    metrics = {
+                                        'Model': model.capitalize(),
+                                        'Average Score': analysed_data[f'{model}_score'].mean(),
+                                        'Std Dev': analysed_data[f'{model}_score'].std(),
+                                        'Positive %': len(analysed_data[analysed_data[f'{model}_sentiment'] == 'Positive']) / len(analysed_data) * 100,
+                                        'Negative %': len(analysed_data[analysed_data[f'{model}_sentiment'] == 'Negative']) / len(analysed_data) * 100,
+                                        'Neutral %': len(analysed_data[analysed_data[f'{model}_sentiment'] == 'Neutral']) / len(analysed_data) * 100
+                                    }
+                                    model_metrics.append(metrics)
+                                
+                                # Add ensemble metrics
+                                model_metrics.append({
+                                    'Model': 'Ensemble',
+                                    'Average Score': analysed_data['Sentiment_Score'].mean(),
+                                    'Std Dev': analysed_data['Sentiment_Score'].std(),
+                                    'Positive %': len(analysed_data[analysed_data['Sentiment'] == 'Positive']) / len(analysed_data) * 100,
+                                    'Negative %': len(analysed_data[analysed_data['Sentiment'] == 'Negative']) / len(analysed_data) * 100,
+                                    'Neutral %': len(analysed_data[analysed_data['Sentiment'] == 'Neutral']) / len(analysed_data) * 100
+                                })
+                                
+                                # Display metrics table
+                                metrics_df = pd.DataFrame(model_metrics)
+                                metrics_df = metrics_df.set_index('Model')
+                                st.dataframe(metrics_df.style.format({
+                                    'Average Score': '{:.3f}',
+                                    'Std Dev': '{:.3f}',
+                                    'Positive %': '{:.1f}%',
+                                    'Negative %': '{:.1f}%',
+                                    'Neutral %': '{:.1f}%'
+                                }))
+                                
+                                # Try to plot model comparison
+                                try:
+                                    st.subheader("Model Score Comparison")
+                                    comp_fig = plot_model_comparison(analysed_data, available_models)
+                                    st.plotly_chart(comp_fig, use_container_width=True)
+                                    
+                                    st.subheader("Model Correlation Matrix")
+                                    corr_fig = plot_model_correlation_matrix(analysed_data, available_models)
+                                    st.plotly_chart(corr_fig)
+                                except Exception as e:
+                                    st.warning(f"Could not generate model comparison plots: {str(e)}")
+                            else:
+                                st.warning("No model-specific data available for comparison.")
+                        
+                        # RAW DATA TAB
+                        with reddit_tabs[2]:
+                            st.subheader("Reddit Activity")
+                            display_df = analysed_data[['Date', 'Type', 'Text', 'Sentiment', 'Sentiment_Score', 'Score', 'URL']].copy()
+                            
+                            # Add model columns if available
+                            if available_models and st.checkbox("Show Individual Model Scores", key="reddit_models"):
+                                for model in available_models:
+                                    display_df[f"{model.capitalize()} Score"] = analysed_data[f"{model}_score"]
+                            
+                            display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                            st.dataframe(
+                                display_df.sort_values('Date', ascending=False),
+                                use_container_width=True
                             )
-                            st.metric(
-                                "Negative Posts/Comments",
-                                len(analysed_data[analysed_data['Sentiment'] == 'Negative'])
+                            
+                            # Add download button
+                            st.download_button(
+                                "Download Reddit Analysis Data",
+                                analysed_data.to_csv(index=False),
+                                "reddit_analysis.csv",
+                                "text/csv",
+                                key='download-reddit-data'
                             )
-                        
-                        # Display sentiment distribution
-                        st.subheader("Reddit Sentiment Distribution")
-                        
-                        # Create sentiment distribution plot
-                        fig = go.Figure()
-                        
-                        # Add sentiment score distribution
-                        fig.add_trace(go.Box(
-                            y=analysed_data['Sentiment_Score'],  # Changed from 'Sentiment Score'
-                            name='Sentiment Distribution',
-                            boxpoints='all',
-                            jitter=0.3,
-                            pointpos=-1.8
-                        ))
-                        
-                        fig.update_layout(
-                            title="Sentiment Score Distribution",
-                            yaxis_title="Sentiment Score",
-                            height=400,
-                            showlegend=False,
-                            yaxis=dict(
-                                range=[-1, 1],
-                                zeroline=True,
-                                zerolinecolor='rgba(128,128,128,0.4)'
-                            )
-                        )
-                        
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Display sentiment trend
-                        st.subheader("Reddit Sentiment Trend")
-                        
-                        # Calculate daily sentiment
-                        daily_sentiment = (analysed_data
-                            .assign(Date=analysed_data['Date'].dt.date)
-                            .groupby('Date')
-                            .agg({
-                                'Sentiment_Score': 'mean',  # Changed from 'Sentiment Score'
-                                'Type': 'count'
-                            })
-                            .reset_index())
-                        
-                        # Create trend plot
-                        fig = go.Figure()
-                        
-                        # Add sentiment line
-                        fig.add_trace(
-                            go.Scatter(
-                                x=daily_sentiment['Date'],
-                                y=daily_sentiment['Sentiment_Score'],  # Changed from 'Sentiment Score'
-                                mode='lines+markers',
-                                name='Reddit Sentiment',
-                                line=dict(color='orange', width=2),
-                                marker=dict(size=6)
-                            )
-                        )
-                        
-                        # Add post/comment count bars
-                        fig.add_trace(
-                            go.Bar(
-                                x=daily_sentiment['Date'],
-                                y=daily_sentiment['Type'],
-                                name='Number of Posts/Comments',
-                                yaxis='y2',
-                                marker_color='rgba(255,165,0,0.2)'
-                            )
-                        )
-                        
-                        fig.update_layout(
-                            title="Reddit Sentiment Over Time",
-                            xaxis_title="Date",
-                            yaxis=dict(
-                                title="Sentiment Score",
-                                range=[-1, 1],
-                                gridcolor='rgba(128,128,128,0.2)',
-                                zeroline=True,
-                                zerolinecolor='rgba(128,128,128,0.4)'
-                            ),
-                            yaxis2=dict(
-                                title="Number of Posts/Comments",
-                                overlaying='y',
-                                side='right',
-                                showgrid=False
-                            ),
-                            height=400,
-                            showlegend=True,
-                            hovermode='x unified',
-                            plot_bgcolor='white'
-                        )
-                        
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Display recent posts/comments
-                        st.subheader("Recent Reddit Activity")
-                        display_df = analysed_data[['Date', 'Type', 'Text', 'Sentiment', 'Sentiment_Score', 'Score', 'URL']].copy()  # Changed from 'Sentiment Score'
-                        display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-                        st.dataframe(
-                            display_df.sort_values('Date', ascending=False),
-                            use_container_width=True
-                        )
-                        
-                        # Add download button
-                        st.download_button(
-                            "Download Reddit Analysis Data",
-                            analysed_data.to_csv(index=False),
-                            "reddit_analysis.csv",
-                            "text/csv",
-                            key='download-reddit-data'
-                        )
                     else:
                         st.warning("Could not analyse Reddit content")
                 else:
@@ -579,7 +1005,7 @@ def reddit_analysis_tab():
                     
             except Exception as e:
                 st.error(f"Error in Reddit analysis: {str(e)}")
-                st.exception(e)  # Show the full traceback
+                st.exception(e)
 
 def sentiment_analysis_page():
     st.title("🔍 Sentiment Analysis")

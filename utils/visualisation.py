@@ -249,3 +249,196 @@ def plot_enhanced_correlation_matrix(correlations, metrics):
     )
     
     return fig
+
+def plot_model_comparison(data_df, model_columns):
+    """Create visualization comparing different sentiment models"""
+    import streamlit as st
+    import plotly.graph_objects as go
+    import pandas as pd
+    import numpy as np
+
+    try:
+        # Ensure we're working with a copy to avoid modifying original
+        df = data_df.copy()
+        
+        # Ensure Date column is properly formatted
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+            df['Date_Only'] = df['Date'].dt.date
+        else:
+            st.warning("Date column not found in data")
+            return None
+        
+        # Create model data dictionary
+        model_data = {}
+        model_data['Date'] = df['Date_Only']  # Use date only for grouping
+        
+        # Add scores for each model
+        for model in model_columns:
+            col_name = f'{model}_score'
+            if col_name in df.columns:
+                model_data[model.capitalize()] = pd.to_numeric(df[col_name], errors='coerce')
+            else:
+                st.warning(f"Column {col_name} not found in data")
+                return None
+                
+        # Add ensemble sentiment score
+        ensemble_col = 'Sentiment_Score'
+        if ensemble_col in df.columns:
+            model_data['Ensemble'] = pd.to_numeric(df[ensemble_col], errors='coerce')
+        else:
+            # Try alternate column name with space
+            ensemble_col = 'Sentiment Score'
+            if ensemble_col in df.columns:
+                model_data['Ensemble'] = pd.to_numeric(df[ensemble_col], errors='coerce')
+            else:
+                st.warning(f"Ensemble score column not found in data")
+                return None
+        
+        # Convert to DataFrame
+        model_df = pd.DataFrame(model_data)
+        
+        # Group by date and calculate mean
+        daily_model_df = model_df.groupby('Date').mean().reset_index()
+        
+        # Create line chart using Plotly
+        fig = go.Figure()
+        
+        # Add lines for each model
+        colors = {
+            'Textblob': '#3498db',  # Blue
+            'Vader': '#2ecc71',     # Green
+            'Finbert': '#e74c3c',   # Red
+            'Ensemble': '#9b59b6'   # Purple
+        }
+        
+        for model in model_columns:
+            model_name = model.capitalize()
+            if model_name in daily_model_df.columns:
+                fig.add_trace(go.Scatter(
+                    x=daily_model_df['Date'],
+                    y=daily_model_df[model_name],
+                    mode='lines',
+                    name=model_name,
+                    line=dict(
+                        color=colors.get(model_name, '#666'), 
+                        width=2
+                    )
+                ))
+        
+        # Add ensemble line
+        if 'Ensemble' in daily_model_df.columns:
+            fig.add_trace(go.Scatter(
+                x=daily_model_df['Date'],
+                y=daily_model_df['Ensemble'],
+                mode='lines',
+                name='Ensemble',
+                line=dict(
+                    color=colors['Ensemble'],
+                    width=3, 
+                    dash='dash'
+                )
+            ))
+        
+        # Update layout
+        fig.update_layout(
+            title="Model Sentiment Comparison",
+            xaxis_title="Date",
+            yaxis_title="Sentiment Score",
+            yaxis=dict(
+                range=[-1, 1],
+                zeroline=True,
+                zerolinecolor='rgba(128,128,128,0.4)'
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            hovermode='x unified',
+            plot_bgcolor='white'
+        )
+        
+        return fig
+        
+    except Exception as e:
+        # Explicit import of streamlit here to ensure it's available
+        import streamlit as st
+        st.warning(f"Could not generate model comparison plots: {e}")
+        return None
+
+
+def plot_model_correlation_matrix(data_df, model_columns):
+    """Create correlation matrix for different sentiment models"""
+    import streamlit as st
+    import plotly.graph_objects as go
+    import pandas as pd
+    import numpy as np
+    
+    try:
+        # Create a copy of the data
+        df = data_df.copy()
+        
+        # Extract model scores with explicit conversion to numeric
+        model_data = pd.DataFrame()
+        
+        # Get scores for each model and ensure they're numeric
+        for model in model_columns:
+            col_name = f'{model}_score'
+            if col_name in df.columns:
+                model_data[model.capitalize()] = pd.to_numeric(df[col_name], errors='coerce')
+            else:
+                st.warning(f"Column {col_name} not found in data")
+                return None
+        
+        # Add the ensemble score - try both possible column names
+        if 'Sentiment_Score' in df.columns:
+            model_data['Ensemble'] = pd.to_numeric(df['Sentiment_Score'], errors='coerce')
+        elif 'Sentiment Score' in df.columns:
+            model_data['Ensemble'] = pd.to_numeric(df['Sentiment Score'], errors='coerce')
+        else:
+            st.warning("Ensemble score column not found in data")
+            return None
+        
+        # Drop rows with NA values
+        model_data = model_data.dropna()
+        
+        if len(model_data) == 0:
+            st.warning("No valid data for correlation calculation after removing NA values")
+            return None
+            
+        # Calculate correlation matrix
+        corr_matrix = model_data.corr()
+        
+        # Create heatmap
+        fig = go.Figure(data=go.Heatmap(
+            z=corr_matrix.values,
+            x=corr_matrix.columns,
+            y=corr_matrix.index,
+            colorscale='RdBu',
+            zmin=-1,
+            zmax=1,
+            text=np.round(corr_matrix.values, 3),
+            texttemplate='%{text}',
+            textfont={"size": 14},
+            hoverongaps=False
+        ))
+        
+        fig.update_layout(
+            title="Model Correlation Matrix",
+            height=450,
+            width=450,
+            xaxis_title="",
+            yaxis_title="",
+            yaxis_autorange='reversed'
+        )
+        
+        return fig
+        
+    except Exception as e:
+        # Explicit import of streamlit here to ensure it's available
+        import streamlit as st
+        st.warning(f"Could not generate correlation matrix: {e}")
+        return None

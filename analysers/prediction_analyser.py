@@ -488,3 +488,173 @@ class MarketPredictionAnalyser:
         except Exception as e:
             st.error(f"Error evaluating predictions: {str(e)}")
             return None
+    
+class MultiModelPredictionAnalyser(MarketPredictionAnalyser):
+    """Extension of MarketPredictionAnalyser that supports multiple sentiment models"""
+    
+    def __init__(self):
+        super().__init__()
+        self.model_sentiment_models = {}  # Dictionary to store different models
+        self.model_predictions = {}  # Dictionary to store predictions from each model
+    
+    def prepare_model_specific_data(self, market_data, news_data, model_name):
+        """Prepare data for a specific sentiment model"""
+        try:
+            # Create copies to avoid modifying originals
+            market_copy = market_data.copy()
+            news_copy = news_data.copy()
+            
+            # Find model-specific sentiment column
+            sentiment_col = f'{model_name}_score'
+            if sentiment_col not in news_copy.columns:
+                st.error(f"Could not find {sentiment_col} column in news data")
+                return None
+            
+            # Ensure datetime format
+            market_copy['Date'] = pd.to_datetime(market_copy['Date'])
+            news_copy['Date'] = pd.to_datetime(news_copy['Date'])
+            
+            # Create date-only columns for merging
+            market_copy['DateOnly'] = market_copy['Date'].dt.date
+            news_copy['DateOnly'] = news_copy['Date'].dt.date
+            
+            # Calculate daily sentiment
+            daily_sentiment = news_copy.groupby('DateOnly')[sentiment_col].mean().reset_index()
+            daily_sentiment.columns = ['DateOnly', f'{model_name.capitalize()}_Sentiment']
+            
+            # Merge data
+            combined = pd.merge(market_copy, daily_sentiment, on='DateOnly', how='left')
+            
+            # Fill missing sentiment values
+            combined[f'{model_name.capitalize()}_Sentiment'] = combined[f'{model_name.capitalize()}_Sentiment'].fillna(0)
+            
+            return combined
+            
+        except Exception as e:
+            st.error(f"Error preparing model-specific data for {model_name}: {str(e)}")
+            return None
+    
+    def train_model_specific_models(self, market_data, news_data, available_models):
+        """Train a separate model for each sentiment model"""
+        for model_name in available_models:
+            try:
+                st.write(f"Training model for {model_name.capitalize()} sentiment...")
+                
+                # Prepare data for this model
+                combined_data = self.prepare_model_specific_data(market_data, news_data, model_name)
+                
+                if combined_data is None:
+                    continue
+                
+                # Create a new prediction model for this sentiment model
+                self.model_sentiment_models[model_name] = RandomForestRegressor(
+                    n_estimators=50,
+                    max_depth=5,
+                    min_samples_split=2,
+                    random_state=42
+                )
+                
+                # Define features
+                features = ['Open', 'High', 'Low', 'Close', 'Volume', f'{model_name.capitalize()}_Sentiment']
+                
+                # Create sequences
+                X = []
+                y = []
+                
+                valid_range = len(combined_data) - self.prediction_days
+                
+                for i in range(valid_range - self.sequence_length + 1):
+                    try:
+                        sequence = []
+                        for j in range(self.sequence_length):
+                            row_features = []
+                            for feature in features:
+                                if feature in combined_data.columns:
+                                    row_features.append(combined_data.iloc[i + j][feature])
+                                else:
+                                    row_features.append(0)
+                            sequence.extend(row_features)
+                        
+                        target = combined_data.iloc[i + self.sequence_length:i + self.sequence_length + self.prediction_days]['Close'].values
+                        
+                        if len(target) == self.prediction_days:
+                            X.append(sequence)
+                            y.append(target)
+                    except Exception:
+                        continue
+                
+                if not X:
+                    st.warning(f"No valid sequences for {model_name}")
+                    continue
+                
+                X = np.array(X)
+                y = np.array(y)
+                
+                # Normalize features
+                X = self.scaler.fit_transform(X)
+                
+                # Train model
+                self.model_sentiment_models[model_name].fit(X, y)
+                st.success(f"✅ {model_name.capitalize()} model trained successfully!")
+                
+            except Exception as e:
+                st.error(f"Error training {model_name} model: {str(e)}")
+    
+    def predict_with_model_specific_sentiment(self, market_data, news_data, model_name):
+        """Predict using a specific sentiment model"""
+        try:
+            if model_name not in self.model_sentiment_models:
+                raise ValueError(f"{model_name.capitalize()} model has not been trained")
+            
+            # Prepare data for this model
+            combined_data = self.prepare_model_specific_data(market_data, news_data, model_name)
+            
+            if combined_data is None:
+                raise ValueError(f"Could not prepare data for {model_name}")
+            
+            # Define features
+            features = ['Open', 'High', 'Low', 'Close', 'Volume', f'{model_name.capitalize()}_Sentiment']
+            
+            # Create sequence
+            sequence = []
+            start_idx = len(combined_data) - self.sequence_length
+            
+            for i in range(self.sequence_length):
+                row_features = []
+                for feature in features:
+                    if feature in combined_data.columns:
+                        row_features.append(combined_data.iloc[start_idx + i][feature])
+                    else:
+                        row_features.append(0)
+                sequence.extend(row_features)
+            
+            features = np.array(sequence).reshape(1, -1)
+            features = self.scaler.transform(features)
+            
+            return self.model_sentiment_models[model_name].predict(features)[0]
+            
+        except Exception as e:
+            st.error(f"Error in prediction with {model_name} model: {str(e)}")
+            return None
+    
+    def predict_all_models(self, market_data, news_data, available_models):
+        """Generate predictions using all available models"""
+        self.model_predictions = {}
+        
+        # First, get the market-only prediction
+        market_predictions = self.predict_market(market_data)
+        if market_predictions is not None:
+            self.model_predictions['market'] = market_predictions
+        
+        # Next, get the ensemble sentiment prediction
+        ensemble_predictions = self.predict_with_sentiment(market_data, news_data)
+        if ensemble_predictions is not None:
+            self.model_predictions['ensemble'] = ensemble_predictions
+        
+        # Finally, get predictions for each individual model
+        for model_name in available_models:
+            predictions = self.predict_with_model_specific_sentiment(market_data, news_data, model_name)
+            if predictions is not None:
+                self.model_predictions[model_name] = predictions
+        
+        return self.model_predictions    

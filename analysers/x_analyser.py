@@ -253,7 +253,8 @@ class XAnalyser:
                     if not text:
                         continue
                         
-                    sentiment_result = sentiment_analyser.analyse_sentiment(text)
+                    # Use return_all_models=True to get individual model scores
+                    sentiment_result = sentiment_analyser.analyse_sentiment(text, return_all_models=True)
                     
                     # Calculate engagement score with weights
                     engagement_score = (
@@ -263,6 +264,7 @@ class XAnalyser:
                         int(tweet.get('Quote_Tweets', 0)) * 2.0
                     )
                     
+                    # Create base analyzed tweet
                     analyzed_tweet = {
                         'Date': pd.to_datetime(tweet['Date']),
                         'Text': text[:200] + '...' if len(text) > 200 else text,
@@ -280,6 +282,13 @@ class XAnalyser:
                         'Tweet_ID': str(tweet.get('Tweet_ID', '')),
                     }
                     
+                    # Add individual model scores if available
+                    if 'individual_models' in sentiment_result:
+                        for model, model_result in sentiment_result['individual_models'].items():
+                            analyzed_tweet[f'{model}_score'] = model_result['score']
+                            analyzed_tweet[f'{model}_sentiment'] = model_result['sentiment']
+                            analyzed_tweet[f'{model}_confidence'] = model_result['confidence']
+                    
                     analyzed_tweets.append(analyzed_tweet)
             
             # Clear progress bar
@@ -296,6 +305,13 @@ class XAnalyser:
                 # Store raw tweet data in session state for correlation analysis
                 st.session_state.twitter_raw_data = raw_tweet_df
                 st.success(f"✅ Saved {len(raw_tweet_df)} analyzed tweets for correlation analysis")
+                
+                # Store available models in session state
+                available_models = []
+                for model in ['textblob', 'vader', 'finbert']:
+                    if f'{model}_score' in raw_tweet_df.columns:
+                        available_models.append(model)
+                st.session_state.available_models = available_models
                 
                 # Create date and hour columns for hourly aggregation
                 raw_tweet_df['Date_Only'] = raw_tweet_df['Date'].dt.date

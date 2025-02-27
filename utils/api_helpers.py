@@ -4,6 +4,7 @@ import streamlit as st
 from datetime import datetime, timedelta
 import sys
 import os
+import json  # Make sure this import is here
 
 # Add the project root directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -94,53 +95,58 @@ def fetch_news_data(symbol, start_date=None, end_date=None):
         'api_token': api_key,
         's': symbol,
         'limit': 1000,
-        'offset': 0,
-        'from': start_date.strftime('%Y-%m-%d') if start_date else None,
-        'to': end_date.strftime('%Y-%m-%d') if end_date else None
+        'offset': 0
     }
+    
+    # Only add date parameters if they are provided
+    if start_date:
+        params['from'] = start_date.strftime('%Y-%m-%d')
+    if end_date:
+        params['to'] = end_date.strftime('%Y-%m-%d')
     
     try:
         response = requests.get(base_url, params=params)
         
         if response.status_code == 200:
-            data = response.json()
+            data = json.loads(response.text)
+            
             if isinstance(data, list):
                 news_data = []
                 for item in data:
                     try:
-                        # Handle already tz-aware timestamps properly
-                        news_date = pd.to_datetime(item.get('date'))
-                        if news_date.tzinfo is not None:
-                            # Convert to UTC if it's tz-aware
-                            news_date = news_date.tz_convert('UTC')
+                        # Basic data extraction
+                        date_str = item.get('date')
+                        if date_str:
+                            news_date = pd.to_datetime(date_str)
+                            # Handle timezone properly - check if already tz-aware
+                            if news_date.tzinfo is None:
+                                news_date = news_date.tz_localize('UTC')
                         else:
-                            # Localise to UTC if it's tz-naive
-                            news_date = news_date.tz_localise('UTC')
+                            continue  # Skip items without dates
                             
-                        # Compare dates after converting to UTC
-                        if (not start_date or news_date >= start_date) and \
-                           (not end_date or news_date <= end_date):
-                            news_item = {
-                                'Date': news_date,
-                                'Title': item.get('title', ''),
-                                'Text': item.get('text', ''),
-                                'Source': item.get('source', ''),
-                                'URL': item.get('link', '')
-                            }
-                            news_data.append(news_item)
+                        news_item = {
+                            'Date': news_date,
+                            'Title': item.get('title', ''),
+                            'Text': item.get('text', ''),
+                            'Source': item.get('source', ''),
+                            'URL': item.get('link', '')
+                        }
+                        news_data.append(news_item)
                     except Exception as e:
                         st.write(f"Error processing item: {str(e)}")
                         continue
                 
                 df = pd.DataFrame(news_data)
                 if not df.empty:
-                    # Convert all dates to naive timestamps after filtering
-                    df['Date'] = df['Date'].dt.tz_convert(None)
+                    # Proper handling of timezone conversion
+                    # First check if we have any data
+                    df['Date'] = df['Date'].apply(
+                        lambda dt: dt.tz_convert(None) if dt.tzinfo is not None else dt
+                    )
                     df = df.sort_values('Date', ascending=True)
-                    
-                    st.write(f"Successfully processed {len(df)} news items")
                     return df
-                
+            
+            st.warning(f"No news data found for {symbol} in the market data period")
             return pd.DataFrame()
         else:
             st.error(f"Error fetching news data: {response.status_code}")

@@ -181,12 +181,13 @@ class FinancialSentimentAnalyser:
             logging.error(f"FinBERT analysis error: {str(e)}")
             return None
 
-    def analyse_sentiment(self, text: str) -> Dict:
+    def analyse_sentiment(self, text: str, return_all_models=False) -> Dict:
         """
         Analyze sentiment using ensemble of available models
         
         Args:
             text (str): Text to analyse
+            return_all_models (bool): Whether to return individual model results
             
         Returns:
             Dict: Combined sentiment analysis results
@@ -236,7 +237,7 @@ class FinancialSentimentAnalyser:
             # Determine sentiment label
             sentiment = self._get_sentiment_label(ensemble_score)
             
-            return {
+            result = {
                 'sentiment': sentiment,
                 'score': ensemble_score,
                 'confidence': ensemble_confidence,
@@ -250,6 +251,19 @@ class FinancialSentimentAnalyser:
                 },
                 'polarisation_metrics': polarisation_metrics
             }
+            
+            # If requested, add full individual model results
+            if return_all_models:
+                result['individual_models'] = {}
+                for model, model_result in model_results.items():
+                    result['individual_models'][model] = {
+                        'score': model_result['score'],
+                        'confidence': model_result['confidence'],
+                        'sentiment': self._get_sentiment_label(model_result['score']),
+                        'detail': model_result.get('detail_scores', {})
+                    }
+            
+            return result
 
         except Exception as e:
             logging.error(f"Error in sentiment analysis: {str(e)}")

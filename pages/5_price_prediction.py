@@ -15,7 +15,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-from analysers.prediction_analyser import MarketPredictionAnalyser
+from analysers.prediction_analyser import MarketPredictionAnalyser, MultiModelPredictionAnalyser
 
 def prepare_data_for_prediction(market_data, news_data, reddit_data=None, twitter_data=None):
     """Prepare data for prediction with improved column detection and error handling"""
@@ -194,6 +194,73 @@ def plot_predictions(historical_data, market_predictions, sentiment_predictions,
 
     return fig
 
+def plot_multi_model_predictions(historical_data, model_predictions):
+    """Create visualization comparing predictions from multiple models"""
+    fig = go.Figure()
+
+    # Plot historical data
+    fig.add_trace(
+        go.Scatter(
+            x=historical_data.index[-30:],  # Last 30 days
+            y=historical_data['Close'][-30:],
+            name='Historical',
+            line=dict(color='blue', width=2)
+        )
+    )
+
+    # Calculate prediction dates
+    last_date = historical_data.index[-1]
+    sample_predictions = next(iter(model_predictions.values()))
+    prediction_dates = [last_date + timedelta(days=i+1) for i in range(len(sample_predictions))]
+
+    # Define model colors
+    model_colors = {
+        'market': '#666666',
+        'ensemble': '#9b59b6',
+        'textblob': '#3498db',
+        'vader': '#2ecc71',
+        'finbert': '#e74c3c'
+    }
+
+    # Plot each model's predictions
+    for model_name, predictions in model_predictions.items():
+        fig.add_trace(
+            go.Scatter(
+                x=prediction_dates,
+                y=predictions,
+                name=model_name.capitalize(),
+                mode='lines+markers',
+                line=dict(
+                    color=model_colors.get(model_name, '#000'),
+                    width=3 if model_name in ['market', 'ensemble'] else 2,
+                    dash='dash' if model_name == 'market' else None
+                ),
+                marker=dict(
+                    size=8 if model_name in ['market', 'ensemble'] else 6,
+                    symbol='circle'
+                )
+            )
+        )
+
+    # Update layout
+    fig.update_layout(
+        title="Price Predictions by Model",
+        xaxis_title="Date",
+        yaxis_title="Price",
+        height=600,
+        showlegend=True,
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+
+    return fig
+
 def display_model_metrics(metrics):
     """Display comprehensive model performance metrics."""
     st.subheader("Model Performance Comparison")
@@ -252,6 +319,60 @@ def display_model_metrics(metrics):
         - Direction: {metrics['improvement']['direction_improvement']:.1f}%
         """)
 
+def display_multi_model_metrics(model_predictions, last_price):
+    """Display metrics for predictions from multiple models"""
+    st.subheader("Model Predictions Comparison")
+    
+    # Calculate model metrics
+    metrics = []
+    
+    for model_name, predictions in model_predictions.items():
+        # Calculate change from last price
+        first_day_change = (predictions[0] - last_price) / last_price * 100
+        period_change = (predictions[-1] - last_price) / last_price * 100
+        
+        # Calculate trend direction
+        trend = "Up" if predictions[-1] > predictions[0] else "Down" if predictions[-1] < predictions[0] else "Flat"
+        
+        # Add to metrics
+        metrics.append({
+            'Model': model_name.capitalize(),
+            'First Day': predictions[0],
+            'Last Day': predictions[-1],
+            'First Day Change': first_day_change,
+            'Period Change': period_change,
+            'Trend': trend
+        })
+    
+    # Convert to DataFrame for display
+    metrics_df = pd.DataFrame(metrics)
+    
+    # Display metrics table
+    st.dataframe(
+        metrics_df.style.format({
+            'First Day': '${:,.2f}',
+            'Last Day': '${:,.2f}',
+            'First Day Change': '{:+.2f}%',
+            'Period Change': '{:+.2f}%'
+        }),
+        use_container_width=True
+    )
+    
+    # Find model with best and worst performance
+    best_model = metrics_df.loc[metrics_df['Period Change'].idxmax()]
+    worst_model = metrics_df.loc[metrics_df['Period Change'].idxmin()]
+    
+    # Display best and worst models
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info(f"**Most Optimistic: {best_model['Model']}**  \n"
+                f"Predicts {best_model['Period Change']:+.2f}% change")
+    
+    with col2:
+        st.info(f"**Most Pessimistic: {worst_model['Model']}**  \n"
+                f"Predicts {worst_model['Period Change']:+.2f}% change")
+
 def price_prediction_page():
     st.title("📈 Price Prediction Analysis")
 
@@ -262,9 +383,6 @@ def price_prediction_page():
         return
 
     try:
-        # Initialize predictor
-        predictor = MarketPredictionAnalyser()
-        
         # Get available data sources
         data_sources = {
             'Market Data': st.session_state.market_data,
@@ -294,6 +412,9 @@ def price_prediction_page():
         with col2:
             prediction_days = st.number_input("Prediction Days", min_value=1, max_value=5, value=2)
 
+        # Option to use multiple sentiment models
+        multi_model = st.checkbox("Use multiple sentiment models for comparison", value=True)
+
         if st.button("Train Models"):
             with st.spinner("Preparing data for training..."):
                 # Prepare combined data
@@ -311,34 +432,78 @@ def price_prediction_page():
                 # Store combined data in session state
                 st.session_state.combined_data = combined_data
                 
-                # Set sequence length and prediction days
-                predictor.sequence_length = sequence_length
-                predictor.prediction_days = prediction_days
-                
-                # Train market model
-                with st.spinner("Training market-only model..."):
-                    market_success = predictor.train_market_model(combined_data)
+                if multi_model and 'available_models' in st.session_state:
+                    # Train multi-model predictor
+                    predictor = MultiModelPredictionAnalyser()
+                    predictor.sequence_length = sequence_length
+                    predictor.prediction_days = prediction_days
                     
-                    if market_success:
-                        st.success("✅ Market model trained successfully!")
-                    else:
-                        st.error("❌ Failed to train market model")
-                        return
-
-                # Train sentiment model
-                with st.spinner("Training sentiment-enhanced model..."):
-                    sentiment_success = predictor.train_sentiment_model(
-                        combined_data,
-                        data_sources['News Data']
-                    )
+                    # Train market model
+                    with st.spinner("Training market-only model..."):
+                        market_success = predictor.train_market_model(combined_data)
+                        
+                        if market_success:
+                            st.success("✅ Market model trained successfully!")
+                        else:
+                            st.error("❌ Failed to train market model")
+                            return
                     
-                    if sentiment_success:
-                        st.success("✅ Sentiment model trained successfully!")
-                        st.session_state.predictor = predictor
-                        st.session_state.models_trained = True
-                    else:
-                        st.error("❌ Failed to train sentiment model")
-                        return
+                    # Train ensemble sentiment model
+                    with st.spinner("Training ensemble sentiment model..."):
+                        sentiment_success = predictor.train_sentiment_model(
+                            combined_data,
+                            data_sources['News Data']
+                        )
+                        
+                        if sentiment_success:
+                            st.success("✅ Ensemble sentiment model trained successfully!")
+                        else:
+                            st.error("❌ Failed to train ensemble sentiment model")
+                            return
+                    
+                    # Train model-specific sentiment models
+                    with st.spinner("Training model-specific sentiment models..."):
+                        predictor.train_model_specific_models(
+                            combined_data,
+                            data_sources['News Data'],
+                            st.session_state.available_models
+                        )
+                    
+                    st.session_state.predictor = predictor
+                    st.session_state.models_trained = True
+                    st.session_state.multi_model = True
+                    
+                else:
+                    # Train standard predictor
+                    predictor = MarketPredictionAnalyser()
+                    predictor.sequence_length = sequence_length
+                    predictor.prediction_days = prediction_days
+                    
+                    # Train market model
+                    with st.spinner("Training market-only model..."):
+                        market_success = predictor.train_market_model(combined_data)
+                        
+                        if market_success:
+                            st.success("✅ Market model trained successfully!")
+                        else:
+                            st.error("❌ Failed to train market model")
+                            return
+                    
+                    # Train sentiment model
+                    with st.spinner("Training sentiment model..."):
+                        sentiment_success = predictor.train_sentiment_model(
+                            combined_data,
+                            data_sources['News Data']
+                        )
+                        
+                        if sentiment_success:
+                            st.success("✅ Sentiment model trained successfully!")
+                            st.session_state.predictor = predictor
+                            st.session_state.models_trained = True
+                            st.session_state.multi_model = False
+                        else:
+                            st.error("❌ Failed to train sentiment model")
+                            return
 
         # Predictions section
         if 'models_trained' in st.session_state and st.session_state.models_trained:
@@ -350,44 +515,66 @@ def price_prediction_page():
                 
             # Make predictions
             with st.spinner("Generating predictions..."):
-                market_predictions = st.session_state.predictor.predict_market(st.session_state.combined_data)
-                sentiment_predictions = st.session_state.predictor.predict_with_sentiment(
-                    st.session_state.combined_data,
-                    data_sources['News Data']
-                )
-
-                if market_predictions is not None and sentiment_predictions is not None:
-                    # Plot predictions
-                    fig = plot_predictions(
-                        st.session_state.combined_data.set_index('Date'),
-                        market_predictions,
-                        sentiment_predictions
+                if st.session_state.multi_model:
+                    # Get predictions from all models
+                    model_predictions = st.session_state.predictor.predict_all_models(
+                        st.session_state.combined_data,
+                        data_sources['News Data'],
+                        st.session_state.available_models
                     )
-                    st.plotly_chart(fig, use_container_width=True)
-
-                    # Show numerical predictions
-                    st.subheader("Predicted Values")
-                    last_price = st.session_state.combined_data['Close'].iloc[-1]
-                    dates = [(datetime.now() + timedelta(days=i+1)).strftime('%Y-%m-%d') 
-                             for i in range(len(market_predictions))]
-
-                    df_predictions = pd.DataFrame({
-                        'Date': dates,
-                        'Market Model': market_predictions,
-                        'Sentiment Model': sentiment_predictions,
-                        'Market Change %': ((market_predictions - last_price) / last_price * 100),
-                        'Sentiment Change %': ((sentiment_predictions - last_price) / last_price * 100)
-                    })
-
-                    st.dataframe(
-                        df_predictions.style.format({
-                            'Market Model': '${:,.2f}',
-                            'Sentiment Model': '${:,.2f}',
-                            'Market Change %': '{:,.2f}%',
-                            'Sentiment Change %': '{:,.2f}%'
-                        }),
-                        use_container_width=True
+                    
+                    if model_predictions:
+                        # Plot all model predictions
+                        fig = plot_multi_model_predictions(
+                            st.session_state.combined_data.set_index('Date'),
+                            model_predictions
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Display metrics comparison
+                        last_price = st.session_state.combined_data['Close'].iloc[-1]
+                        display_multi_model_metrics(model_predictions, last_price)
+                        
+                else:
+                    # Standard prediction with just market and ensemble
+                    market_predictions = st.session_state.predictor.predict_market(st.session_state.combined_data)
+                    sentiment_predictions = st.session_state.predictor.predict_with_sentiment(
+                        st.session_state.combined_data,
+                        data_sources['News Data']
                     )
+                    
+                    if market_predictions is not None and sentiment_predictions is not None:
+                        # Plot predictions
+                        fig = plot_predictions(
+                            st.session_state.combined_data.set_index('Date'),
+                            market_predictions,
+                            sentiment_predictions
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Show numerical predictions
+                        st.subheader("Predicted Values")
+                        last_price = st.session_state.combined_data['Close'].iloc[-1]
+                        dates = [(datetime.now() + timedelta(days=i+1)).strftime('%Y-%m-%d') 
+                                for i in range(len(market_predictions))]
+                        
+                        df_predictions = pd.DataFrame({
+                            'Date': dates,
+                            'Market Model': market_predictions,
+                            'Sentiment Model': sentiment_predictions,
+                            'Market Change %': ((market_predictions - last_price) / last_price * 100),
+                            'Sentiment Change %': ((sentiment_predictions - last_price) / last_price * 100)
+                        })
+                        
+                        st.dataframe(
+                            df_predictions.style.format({
+                                'Market Model': '${:,.2f}',
+                                'Sentiment Model': '${:,.2f}',
+                                'Market Change %': '{:,.2f}%',
+                                'Sentiment Change %': '{:,.2f}%'
+                            }),
+                            use_container_width=True
+                        )
         else:
             st.info("👆 Please train the models first to see predictions")
 

@@ -256,32 +256,55 @@ class RedditAnalyser:
         """Analyse Reddit content using provided sentiment analyser"""
         if reddit_df.empty:
             return pd.DataFrame()
-                
+                    
         try:
             # Analyse sentiment for each post/comment
             analysed_data = []
-                
+                    
             for _, row in reddit_df.iterrows():
                 text = f"{row['Title']} {row['Text']}"
-                sentiment_result = sentiment_analyser.analyse_sentiment(text)
-                    
+                # Use return_all_models=True to get individual model scores
+                sentiment_result = sentiment_analyser.analyse_sentiment(text, return_all_models=True)
+                        
+                # Create base item with main sentiment score
                 analysed_item = {
                     'Date': row['Date'],
                     'Type': row['Type'],
                     'Subreddit': row['Subreddit'],
                     'Score': row['Score'],
-                    'Comments': row['Comments'],
+                    'Comments': row['Comments'] if 'Comments' in row else 0,
                     'Text': row['Text'][:200] + '...' if len(row['Text']) > 200 else row['Text'],
                     'URL': row['URL'],
-                    'Sentiment_Score': sentiment_result['score'],
+                    'Sentiment_Score': float(sentiment_result['score']),
                     'Sentiment': sentiment_result['sentiment'],
-                    'Confidence': sentiment_result.get('confidence', 0.5),
-                    'Polarisation': sentiment_result.get('polarisation_metrics', {}).get('std', 0)
+                    'Confidence': float(sentiment_result.get('confidence', 0.5))
                 }
+                
+                # Add individual model scores if available
+                if 'individual_models' in sentiment_result:
+                    for model, model_result in sentiment_result['individual_models'].items():
+                        analysed_item[f'{model}_score'] = model_result['score']
+                        analysed_item[f'{model}_sentiment'] = model_result['sentiment']
+                        analysed_item[f'{model}_confidence'] = model_result['confidence']
+                
                 analysed_data.append(analysed_item)
+                    
+            # Create DataFrame with analyzed results
+            if analysed_data:
+                df = pd.DataFrame(analysed_data)
                 
-            return pd.DataFrame(analysed_data)
+                # Store available models in session state
+                available_models = []
+                for model in ['textblob', 'vader', 'finbert']:
+                    if f'{model}_score' in df.columns:
+                        available_models.append(model)
+                st.session_state.available_models = available_models
                 
+                return df
+            else:
+                st.warning("No content could be analyzed.")
+                return pd.DataFrame()
+                    
         except Exception as e:
             st.error(f"Error analysing Reddit content: {e}")
             return pd.DataFrame()
