@@ -260,8 +260,15 @@ class RedditAnalyser:
         try:
             # Analyse sentiment for each post/comment
             analysed_data = []
+            total_items = len(reddit_df)
+            st.write(f"Analyzing {total_items} Reddit items...")
+            progress_bar = st.progress(0)
                     
-            for _, row in reddit_df.iterrows():
+            for i, (_, row) in enumerate(reddit_df.iterrows()):
+                # Update progress
+                progress = min(i / total_items, 1.0)
+                progress_bar.progress(progress)
+                
                 text = f"{row['Title']} {row['Text']}"
                 # Use return_all_models=True to get individual model scores
                 sentiment_result = sentiment_analyser.analyse_sentiment(text, return_all_models=True)
@@ -288,7 +295,10 @@ class RedditAnalyser:
                         analysed_item[f'{model}_confidence'] = model_result['confidence']
                 
                 analysed_data.append(analysed_item)
-                    
+            
+            # Clear progress bar when done
+            progress_bar.empty()
+                        
             # Create DataFrame with analyzed results
             if analysed_data:
                 df = pd.DataFrame(analysed_data)
@@ -304,7 +314,7 @@ class RedditAnalyser:
             else:
                 st.warning("No content could be analyzed.")
                 return pd.DataFrame()
-                    
+                        
         except Exception as e:
             st.error(f"Error analysing Reddit content: {e}")
             return pd.DataFrame()

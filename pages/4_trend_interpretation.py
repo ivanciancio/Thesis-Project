@@ -14,11 +14,33 @@ def display_trend_analysis(trend_analysis):
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.metric(
-                "Trend Direction",
-                trend_analysis.get('trend_direction', 'N/A'),
-                delta=f"{trend_analysis.get('trend_strength', 0):.2f}"
-            )
+            # Get trend direction and strength
+            trend_direction = trend_analysis.get('trend_direction', 'N/A')
+            trend_strength = trend_analysis.get('trend_strength', 0)
+            
+            # Configure display based on trend direction
+            if trend_direction == 'Declining':
+                # Show negative value with red arrow for declining trends
+                st.metric(
+                    "Trend Direction",
+                    trend_direction,
+                    delta=f"-{trend_strength:.2f}"
+                )
+            elif trend_direction == 'Stable':
+                # For stable trends, use dash + numerical value
+                st.metric(
+                    "Trend Direction",
+                    trend_direction,
+                    delta=f"— {trend_strength:.2f}",  # Em dash + value
+                    delta_color="off"  # Grey color
+                )
+            else:  # 'Improving' or others
+                # Show positive value with green arrow for improving trends
+                st.metric(
+                    "Trend Direction",
+                    trend_direction,
+                    delta=f"{trend_strength:.2f}"
+                )
         
         with col2:
             st.metric(
@@ -30,6 +52,25 @@ def display_trend_analysis(trend_analysis):
             st.metric(
                 "Volatility",
                 f"{trend_analysis.get('volatility', 0):.3f}"
+            )
+        
+        # Add risk metrics in a new row
+        st.subheader("Risk Metrics")
+        risk_col1, risk_col2 = st.columns(2)
+        
+        with risk_col1:
+            st.metric(
+                "Sharpe Ratio",
+                f"{trend_analysis.get('sharpe_ratio', 0):.3f}",
+                help="Higher values indicate better risk-adjusted returns. >1 is good, >2 is very good."
+            )
+        
+        with risk_col2:
+            st.metric(
+                "Maximum Drawdown",
+                f"{trend_analysis.get('max_drawdown', 0):.2f}%",
+                delta_color="inverse",  # Negative is bad for drawdowns
+                help="Measures the largest percentage drop from peak to trough. Lower values are better."
             )
         
         # Display moving averages comparison

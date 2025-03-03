@@ -22,63 +22,6 @@ from datetime import datetime, timedelta
 import logging
 import numpy as np
 
-def check_sentiment_analyser_function():
-    """Function to test if sentiment_analyser correctly returns model-specific results"""
-    try:
-        # Import the sentiment analyser
-        from analysers.sentiment_analyser import FinancialSentimentAnalyser
-        
-        # Initialize the analyser
-        sentiment_analyser = FinancialSentimentAnalyser()
-        
-        # Show available models
-        st.write("Active models:", sentiment_analyser.models)
-        st.write("Model weights:", sentiment_analyser.model_weights)
-        
-        # Test with a sample text
-        sample_text = "This is a test text for sentiment analysis. Apple stock is performing well."
-        
-        # Test without return_all_models
-        normal_result = sentiment_analyser.analyse_sentiment(sample_text)
-        st.write("Normal result keys:", normal_result.keys())
-        
-        # Test with return_all_models=True
-        model_result = sentiment_analyser.analyse_sentiment(sample_text, return_all_models=True)
-        st.write("Model result keys:", model_result.keys())
-        
-        # Check if individual_models exists
-        if 'individual_models' in model_result:
-            st.success("✅ Individual models data is correctly returned!")
-            st.write("Available models:", list(model_result['individual_models'].keys()))
-            
-            # Show sample of model data
-            for model, data in model_result['individual_models'].items():
-                st.write(f"{model}: {data}")
-        else:
-            st.error("❌ No individual_models key in the result. The analyse_sentiment function may not be implementing return_all_models correctly.")
-            st.write("Full result:", model_result)
-    
-    except Exception as e:
-        st.error(f"Error testing sentiment analyser: {str(e)}")
-        st.exception(e)
-
-class TorchClassesFilter(logging.Filter):
-    """Filter out annoying torch.classes warnings"""
-    def filter(self, record):
-        if "torch.classes" in record.getMessage():
-            return False
-        return True
-
-# Apply the filter to all handlers
-root_logger = logging.getLogger()
-for handler in root_logger.handlers:
-    handler.addFilter(TorchClassesFilter())
-
-# Also apply to stderr handler which might be created later
-stderr_handler = logging.StreamHandler()
-stderr_handler.addFilter(TorchClassesFilter())
-root_logger.addHandler(stderr_handler)
-
 def display_model_info(sentiment_analyser):
     """Display information about active sentiment models and their weights without using charts"""
     st.sidebar.header("🧠 Sentiment Models")
@@ -122,10 +65,11 @@ def display_model_info(sentiment_analyser):
                 min_value=0.0,
                 max_value=1.0,
                 value=weights.get(model_id, 0.0),
-                step=0.1
+                step=0.1,
+                key=f"weight_{model_id}_{id(sentiment_analyser)}"  # Add unique key
             )
     
-    if st.sidebar.button("Apply Custom Weights"):
+    if st.sidebar.button("Apply Custom Weights", key=f"apply_weights_{id(sentiment_analyser)}"):  # Add unique key
         # Normalize weights
         total = sum(custom_weights.values())
         if total > 0:
@@ -317,7 +261,15 @@ def news_analysis_tab():
                     
                     # Process each news item with all models
                     analysed_news = []
-                    for _, row in news_data.iterrows():
+                    total_news = len(news_data)
+                    st.write(f"Analyzing {total_news} news items...")
+                    progress_bar = st.progress(0)
+
+                    for i, (_, row) in enumerate(news_data.iterrows()):
+                        # Update progress
+                        progress = min(i / total_news, 1.0)
+                        progress_bar.progress(progress)
+                        
                         text = f"{row['Title']} {row.get('Text', '')}"
                         # Get results from all models
                         sentiment_result = sentiment_analyser.analyse_sentiment(text, return_all_models=True)
@@ -339,6 +291,9 @@ def news_analysis_tab():
                                 news_item[f'{model}_confidence'] = model_result['confidence']
                         
                         analysed_news.append(news_item)
+
+                    # Clear progress bar when done
+                    progress_bar.empty()
                     
                     # Create DataFrame with analysis results
                     news_df = pd.DataFrame(analysed_news)
@@ -430,14 +385,29 @@ def news_analysis_tab():
                     # RAW DATA TAB
                     with news_tabs[2]:
                         st.subheader("News Articles")
-                        display_df = news_df[['Date', 'Title', 'Sentiment', 'Sentiment Score']].copy()
                         
-                        # Add model columns if available
-                        if available_models and st.checkbox("Show Individual Model Scores"):
-                            for model in available_models:
-                                display_df[f"{model.capitalize()} Score"] = news_df[f"{model}_score"]
+                        # Always include both basic and model columns
+                        basic_columns = ['Date', 'Title', 'Sentiment', 'Sentiment Score']
+                        model_columns = []
                         
-                        display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                        # Get model columns
+                        for model in available_models:
+                            col_name = f"{model}_score"
+                            if col_name in news_df.columns:
+                                # Create nicely formatted column name
+                                news_df[f"{model.capitalize()} Score"] = news_df[col_name]
+                                model_columns.append(f"{model.capitalize()} Score")
+                        
+                        # Combine all columns
+                        all_columns = basic_columns + model_columns
+                        
+                        # Create display dataframe with all columns
+                        display_df = news_df[all_columns].copy()
+                        
+                        # Format date
+                        display_df['Date'] = pd.to_datetime(display_df['Date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        # Display dataframe
                         st.dataframe(
                             display_df.sort_values('Date', ascending=False),
                             use_container_width=True
@@ -486,9 +456,6 @@ def x_analysis_tab():
                 if twitter_data is not None and not twitter_data.empty:
                     # Initialize sentiment analyzer
                     sentiment_analyser = FinancialSentimentAnalyser()
-                    
-                    # Display model information in sidebar
-                    display_model_info(sentiment_analyser)
                     
                     # Analyze content
                     analysed_data = x_analyser.analyse_content(twitter_data, sentiment_analyser)
@@ -688,20 +655,34 @@ def x_analysis_tab():
                             if raw_twitter_available:
                                 raw_tweets = st.session_state.twitter_raw_data
                                 
-                                # Create display DataFrame
-                                display_df = raw_tweets[['Date', 'Text', 'Sentiment', 'Sentiment_Score', 'Author', 'Likes', 'Retweets']].copy()
-                                
-                                # Add model columns if available
+                                # Get available models
                                 available_models = []
                                 for model in ['textblob', 'vader', 'finbert']:
                                     if f'{model}_score' in raw_tweets.columns:
                                         available_models.append(model)
                                 
-                                if available_models and st.checkbox("Show Individual Model Scores", key="twitter_models"):
-                                    for model in available_models:
-                                        display_df[f"{model.capitalize()} Score"] = raw_tweets[f"{model}_score"]
+                                # Basic columns
+                                basic_columns = ['Date', 'Text', 'Sentiment', 'Sentiment_Score', 'Author', 'Likes', 'Retweets']
+                                model_columns = []
                                 
-                                display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                                # Add model columns
+                                for model in available_models:
+                                    col_name = f"{model}_score"
+                                    if col_name in raw_tweets.columns:
+                                        # Create nicely formatted column name
+                                        raw_tweets[f"{model.capitalize()} Score"] = raw_tweets[col_name]
+                                        model_columns.append(f"{model.capitalize()} Score")
+                                
+                                # Combine all columns
+                                all_columns = basic_columns + model_columns
+                                
+                                # Create display dataframe with all columns
+                                display_df = raw_tweets[all_columns].copy()
+                                
+                                # Format date
+                                display_df['Date'] = pd.to_datetime(display_df['Date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+                                
+                                # Display dataframe
                                 st.dataframe(
                                     display_df.sort_values('Date', ascending=False),
                                     use_container_width=True
@@ -778,9 +759,6 @@ def reddit_analysis_tab():
                 if reddit_data is not None and not reddit_data.empty:
                     # Initialize sentiment analyzer
                     sentiment_analyser = FinancialSentimentAnalyser()
-                    
-                    # Display model information in sidebar
-                    display_model_info(sentiment_analyser)
                     
                     # Analyse sentiment
                     analysed_data = reddit_analyser.analyse_content(reddit_data, sentiment_analyser)
@@ -977,14 +955,29 @@ def reddit_analysis_tab():
                         # RAW DATA TAB
                         with reddit_tabs[2]:
                             st.subheader("Reddit Activity")
-                            display_df = analysed_data[['Date', 'Type', 'Text', 'Sentiment', 'Sentiment_Score', 'Score', 'URL']].copy()
                             
-                            # Add model columns if available
-                            if available_models and st.checkbox("Show Individual Model Scores", key="reddit_models"):
-                                for model in available_models:
-                                    display_df[f"{model.capitalize()} Score"] = analysed_data[f"{model}_score"]
+                            # Basic columns
+                            basic_columns = ['Date', 'Type', 'Text', 'Sentiment', 'Sentiment_Score', 'Score', 'URL']
+                            model_columns = []
                             
-                            display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                            # Get model columns
+                            for model in available_models:
+                                col_name = f"{model}_score"
+                                if col_name in analysed_data.columns:
+                                    # Create nicely formatted column name
+                                    analysed_data[f"{model.capitalize()} Score"] = analysed_data[col_name]
+                                    model_columns.append(f"{model.capitalize()} Score")
+                            
+                            # Combine all columns
+                            all_columns = basic_columns + model_columns
+                            
+                            # Create display dataframe with all columns
+                            display_df = analysed_data[all_columns].copy()
+                            
+                            # Format date
+                            display_df['Date'] = pd.to_datetime(display_df['Date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+                            
+                            # Display dataframe
                             st.dataframe(
                                 display_df.sort_values('Date', ascending=False),
                                 use_container_width=True
@@ -1013,6 +1006,12 @@ def sentiment_analysis_page():
     if 'market_data' not in st.session_state or st.session_state.market_data is None:
         st.warning("Please fetch market data first in the Market Data page")
         return
+    
+    # Initialize sentiment analyzer immediately
+    sentiment_analyser = FinancialSentimentAnalyser()
+    
+    # Display model information in sidebar right away
+    display_model_info(sentiment_analyser)
     
     tabs = st.tabs(["EODHD News", "X (Twitter)", "Reddit Analysis"])
     

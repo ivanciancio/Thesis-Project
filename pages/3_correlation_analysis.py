@@ -124,7 +124,7 @@ def interpret_correlation_direction(correlation):
     return "positive" if correlation > 0 else "negative"
 
 def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, twitter_data=None):
-    """Align dates between market data and sentiment data"""
+    """Align dates between market data and sentiment data with enhanced risk metrics"""
     try:
         # Create copies of input data
         market_data = market_data.copy()
@@ -142,6 +142,46 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, tw
         if 'Returns' not in market_data.columns:
             market_data['Returns'] = market_data['Close'].pct_change()
         
+        # Calculate rolling Sharpe ratio (20-day window) with proper error handling
+        window = 5  # Reduce window size to ensure more values are calculated
+        risk_free_rate = 0  # Simplified assumption
+        
+        # Fill NaN values in Returns with 0 for calculation purposes
+        filled_returns = market_data['Returns'].fillna(0)
+        
+        # Calculate rolling metrics with explicit error handling
+        rolling_avg_return = filled_returns.rolling(window=window, min_periods=1).mean()
+        rolling_std_dev = filled_returns.rolling(window=window, min_periods=1).std()
+        
+        # Initialize columns with zeros
+        market_data['Rolling_Sharpe_Ratio'] = 0.0
+        
+        # Calculate Sharpe ratio where std_dev is not zero
+        valid_idx = rolling_std_dev > 0
+        market_data.loc[valid_idx, 'Rolling_Sharpe_Ratio'] = (
+            (rolling_avg_return[valid_idx] - risk_free_rate) / 
+            rolling_std_dev[valid_idx]
+        )
+        
+        # Ensure floating point type
+        market_data['Rolling_Sharpe_Ratio'] = market_data['Rolling_Sharpe_Ratio'].astype(float)
+        
+        # Calculate drawdowns
+        market_data['Cumulative_Returns'] = (1 + filled_returns).cumprod()
+        market_data['Peak'] = market_data['Cumulative_Returns'].cummax()
+        
+        # Calculate drawdown percentage safely
+        market_data['Drawdown'] = 0.0
+        valid_peaks = market_data['Peak'] > 0
+        market_data.loc[valid_peaks, 'Drawdown'] = (
+            (market_data.loc[valid_peaks, 'Cumulative_Returns'] / 
+             market_data.loc[valid_peaks, 'Peak'] - 1) * 100
+        )
+        
+        # Calculate rolling maximum drawdown with explicit min_periods
+        market_data['Rolling_Max_Drawdown'] = market_data['Drawdown'].rolling(
+            window=window, min_periods=1).min().fillna(0).astype(float)
+        
         # Process news sentiment - check for both possible column names
         sentiment_col = None
         for col in news_data.columns:
@@ -158,7 +198,7 @@ def align_dates_and_compute_returns(market_data, news_data, reddit_data=None, tw
         
         # Create base dataframe with market and news data
         base_data = pd.merge(
-            market_data[['DateOnly', 'Returns', 'Close']],
+            market_data[['DateOnly', 'Returns', 'Close', 'Rolling_Sharpe_Ratio', 'Rolling_Max_Drawdown', 'Drawdown']],
             news_grouped,
             on='DateOnly',
             how='inner'

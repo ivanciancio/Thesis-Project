@@ -3,6 +3,9 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
+import streamlit as st
+
+
 
 def plot_market_data(market_data, market_sentiment=None):
     """Create market data visualisation"""
@@ -252,11 +255,6 @@ def plot_enhanced_correlation_matrix(correlations, metrics):
 
 def plot_model_comparison(data_df, model_columns):
     """Create visualization comparing different sentiment models"""
-    import streamlit as st
-    import plotly.graph_objects as go
-    import pandas as pd
-    import numpy as np
-
     try:
         # Ensure we're working with a copy to avoid modifying original
         df = data_df.copy()
@@ -364,19 +362,12 @@ def plot_model_comparison(data_df, model_columns):
         return fig
         
     except Exception as e:
-        # Explicit import of streamlit here to ensure it's available
-        import streamlit as st
         st.warning(f"Could not generate model comparison plots: {e}")
         return None
 
 
 def plot_model_correlation_matrix(data_df, model_columns):
     """Create correlation matrix for different sentiment models"""
-    import streamlit as st
-    import plotly.graph_objects as go
-    import pandas as pd
-    import numpy as np
-    
     try:
         # Create a copy of the data
         df = data_df.copy()
@@ -438,7 +429,5 @@ def plot_model_correlation_matrix(data_df, model_columns):
         return fig
         
     except Exception as e:
-        # Explicit import of streamlit here to ensure it's available
-        import streamlit as st
         st.warning(f"Could not generate correlation matrix: {e}")
         return None

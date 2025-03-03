@@ -37,13 +37,34 @@ def init_session_state():
         st.session_state.analysis_results = None
 
 def calculate_market_metrics(market_data):
-    """Calculate market metrics"""
+    """Calculate market metrics including Sharpe ratio and maximum drawdown"""
+    # Calculate returns if not already present
+    if 'Returns' not in market_data.columns:
+        market_data['Returns'] = market_data['Close'].pct_change()
+    
+    # Calculate current metrics
     metrics = {
         'price_change': (market_data['Close'].iloc[-1] - market_data['Close'].iloc[0]) / market_data['Close'].iloc[0] * 100,
         'avg_volume': market_data['Volume'].mean(),
         'volatility': market_data['Returns'].std() * 100 if 'Returns' in market_data.columns else None,
         'latest_price': market_data['Close'].iloc[-1]
     }
+    
+    # Calculate Sharpe Ratio (using 0% as risk-free rate for simplicity)
+    risk_free_rate = 0 
+    avg_return = market_data['Returns'].mean()
+    std_dev = market_data['Returns'].std()
+    if std_dev > 0:
+        metrics['sharpe_ratio'] = (avg_return - risk_free_rate) / std_dev
+    else:
+        metrics['sharpe_ratio'] = 0
+        
+    # Calculate Maximum Drawdown
+    cumulative_returns = (1 + market_data['Returns'].fillna(0)).cumprod()
+    running_max = cumulative_returns.cummax()
+    drawdown = (cumulative_returns / running_max - 1)
+    metrics['max_drawdown'] = drawdown.min() * 100  # Convert to percentage
+    
     return metrics
 
 def display_market_metrics(metrics):
@@ -58,6 +79,16 @@ def display_market_metrics(metrics):
         st.metric("Volatility", f"{metrics['volatility']:.2f}%" if metrics['volatility'] else "N/A")
     with col4:
         st.metric("Latest Price", f"${metrics['latest_price']:.2f}")
+        
+    # Add risk metrics in a new row
+    st.subheader("Risk Metrics")
+    risk_col1, risk_col2 = st.columns(2)
+    
+    with risk_col1:
+        st.metric("Sharpe Ratio", f"{metrics['sharpe_ratio']:.3f}")
+    with risk_col2:
+        st.metric("Maximum Drawdown", f"{metrics['max_drawdown']:.2f}%", 
+                 delta_color="inverse")  # Negative is bad for drawdowns
 
 # Page configuration
 st.set_page_config(

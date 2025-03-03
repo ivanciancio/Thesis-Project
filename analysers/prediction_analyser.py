@@ -4,6 +4,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.ensemble import RandomForestRegressor
 import logging
 import streamlit as st
+from utils.date_helpers import prepare_dates_for_merge
 
 class MarketPredictionAnalyser:
     def __init__(self):
@@ -209,9 +210,8 @@ class MarketPredictionAnalyser:
     def train_sentiment_model(self, market_data, news_data):
         """Train sentiment-enhanced model with a direct approach to column handling"""
         try:
-            # Create copies to avoid modifying originals
-            market_copy = market_data.copy()
-            news_copy = news_data.copy()
+            # Use date helper to prepare dates
+            market_copy, news_copy = prepare_dates_for_merge([market_data, news_data])
             
             # Find sentiment column in news data
             sentiment_col = None
@@ -564,24 +564,25 @@ class MultiModelPredictionAnalyser(MarketPredictionAnalyser):
                 valid_range = len(combined_data) - self.prediction_days
                 
                 for i in range(valid_range - self.sequence_length + 1):
-                    try:
-                        sequence = []
-                        for j in range(self.sequence_length):
-                            row_features = []
-                            for feature in features:
-                                if feature in combined_data.columns:
-                                    row_features.append(combined_data.iloc[i + j][feature])
-                                else:
-                                    row_features.append(0)
-                            sequence.extend(row_features)
-                        
-                        target = combined_data.iloc[i + self.sequence_length:i + self.sequence_length + self.prediction_days]['Close'].values
-                        
-                        if len(target) == self.prediction_days:
-                            X.append(sequence)
-                            y.append(target)
-                    except Exception:
+                    # Check bounds safely without using try/except
+                    if i + self.sequence_length + self.prediction_days > len(combined_data):
                         continue
+                        
+                    sequence = []
+                    for j in range(self.sequence_length):
+                        row_features = []
+                        for feature in features:
+                            if feature in combined_data.columns and i+j < len(combined_data):
+                                row_features.append(combined_data.iloc[i + j][feature])
+                            else:
+                                row_features.append(0)
+                        sequence.extend(row_features)
+                    
+                    target = combined_data.iloc[i + self.sequence_length:i + self.sequence_length + self.prediction_days]['Close'].values
+                    
+                    if len(target) == self.prediction_days:
+                        X.append(sequence)
+                        y.append(target)
                 
                 if not X:
                     st.warning(f"No valid sequences for {model_name}")
